@@ -222,7 +222,7 @@ with st.sidebar:
     # Links
     st.divider()
     st.caption("Need API keys?")
-    st.markdown("[Get Mochi key](https://app.mochi.cards/settings/api)")
+    st.markdown("[Get Mochi key](https://mochi.cards)")
     st.markdown("[Get OpenAI key](https://platform.openai.com/api-keys)")
 
 
