@@ -258,37 +258,163 @@ def text_to_speech(api_key: str, text: str, voice: str = "coral") -> bytes:
     return response.content
 
 
-def build_feynman_card_content(
+def chat_followup(
+    api_key: str,
+    conversation_history: list[dict],
     original_question: str,
     original_answer: str,
-    rephrased_question: str,
-    source_card_id: str,
+    user_message: str,
 ) -> str:
     """
-    Build markdown content for a new Feynman card.
+    Continue a conversation about the flashcard topic.
     
     Args:
-        original_question: The original question
-        original_answer: The expected answer
-        rephrased_question: The AI-generated rephrased question
-        source_card_id: ID of the original card for reference
+        api_key: OpenAI API key
+        conversation_history: Previous messages in the conversation
+        original_question: The card's question
+        original_answer: The card's answer
+        user_message: The user's follow-up question
         
     Returns:
-        Markdown string for the new card
+        AI response as string
     """
-    return f"""{rephrased_question}
+    client = get_client(api_key)
+    
+    system_prompt = f"""You are a Socratic tutor helping someone deeply understand a topic.
 
----
+Context - The flashcard being studied:
+Question: {original_question}
+Answer: {original_answer}
 
-{original_answer}
+Help the user understand this topic better. Answer their questions, provide clarifications, 
+give examples, and help them build intuition. Be concise but thorough.
 
-<details>
-<summary>📝 Source</summary>
+If they ask to modify or improve the card, suggest specific improvements to the question or answer.
+If they want to create a new card, help them formulate a clear question and answer."""
 
-Original: {original_question}
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Add conversation history (limit to avoid token overflow)
+    for msg in conversation_history[-10:]:
+        messages.append(msg)
+    
+    messages.append({"role": "user", "content": user_message})
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0.7,
+        max_tokens=1000,
+    )
+    
+    return response.choices[0].message.content
 
-Card ID: `{source_card_id}`
-</details>"""
+
+def suggest_card_modification(
+    api_key: str,
+    original_question: str,
+    original_answer: str,
+    conversation_history: list[dict],
+) -> dict:
+    """
+    Suggest an improved version of the card based on the conversation.
+    
+    Returns:
+        Dict with 'question' and 'answer' keys
+    """
+    client = get_client(api_key)
+    
+    # Format conversation for context
+    convo_text = "\n".join([
+        f"{'User' if m['role'] == 'user' else 'Tutor'}: {m['content']}"
+        for m in conversation_history[-10:]
+    ])
+    
+    system_prompt = """Based on the conversation, suggest an improved version of this flashcard.
+Consider:
+- Clarity and precision of the question
+- Completeness and accuracy of the answer
+- Any misconceptions or gaps that came up in discussion
+
+Return a JSON object with 'question' and 'answer' keys.
+Only suggest changes if they genuinely improve the card."""
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"""Original card:
+Question: {original_question}
+Answer: {original_answer}
+
+Conversation:
+{convo_text}
+
+Suggest an improved version (or return the original if no changes needed):"""}
+        ],
+        temperature=0.3,
+        response_format={"type": "json_object"},
+    )
+    
+    import json
+    return json.loads(response.choices[0].message.content)
+
+
+def suggest_new_card(
+    api_key: str,
+    original_question: str,
+    original_answer: str,
+    conversation_history: list[dict],
+    user_request: str = "",
+) -> dict:
+    """
+    Suggest a new card based on the conversation.
+    
+    Returns:
+        Dict with 'question' and 'answer' keys
+    """
+    client = get_client(api_key)
+    
+    # Format conversation for context
+    convo_text = "\n".join([
+        f"{'User' if m['role'] == 'user' else 'Tutor'}: {m['content']}"
+        for m in conversation_history[-10:]
+    ])
+    
+    system_prompt = """Based on the conversation, create a new flashcard that captures
+an important concept, clarification, or insight that came up.
+
+The new card should:
+- Be self-contained and testable
+- Cover a specific concept or fact
+- Have a clear question and concise answer
+
+Return a JSON object with 'question' and 'answer' keys."""
+
+    user_prompt = f"""Original card being studied:
+Question: {original_question}
+Answer: {original_answer}
+
+Conversation:
+{convo_text}
+"""
+    if user_request:
+        user_prompt += f"\nUser's request for the new card: {user_request}"
+    
+    user_prompt += "\n\nCreate a new flashcard:"
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        temperature=0.5,
+        response_format={"type": "json_object"},
+    )
+    
+    import json
+    return json.loads(response.choices[0].message.content)
 
 
 def generate_expansion_cards(

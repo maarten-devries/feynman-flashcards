@@ -255,9 +255,6 @@ if st.session_state.review_state == "idle":
     # Build deck options
     deck_options = {}
     for deck in st.session_state.decks:
-        # Skip Feynman subdecks
-        if deck.get("name") == "Feynman":
-            continue
         display_name = mochi.get_deck_display_name(deck, st.session_state.deck_tree)
         deck_options[display_name] = deck["id"]
     
@@ -543,7 +540,7 @@ if st.session_state.review_state == "evaluating":
     # Hands-free mode: voice input for navigation
     if st.session_state.hands_free_mode:
         st.divider()
-        st.info("🎤 Say 'next' to save & continue, 'skip' to skip, or 'continue' for follow-up")
+        st.info("🎤 Say 'next' to continue, 'skip' to skip, or 'continue' for follow-up")
         
         nav_audio = st.audio_input(
             "Voice command",
@@ -560,9 +557,8 @@ if st.session_state.review_state == "evaluating":
                 nav_lower = nav_transcribed.lower().strip()
                 st.caption(f"Heard: {nav_transcribed}")
                 
-                if nav_lower in ["next", "save", "save and next", "done"]:
-                    # Auto-save and next
-                    st.session_state.pending_action = "save_next"
+                if nav_lower in ["next", "done", "next card"]:
+                    st.session_state.pending_action = "next"
                     st.rerun()
                 elif nav_lower in ["skip", "pass", "skip card"]:
                     st.session_state.pending_action = "skip"
@@ -576,47 +572,12 @@ if st.session_state.review_state == "evaluating":
     # Handle pending actions from voice commands
     if "pending_action" in st.session_state:
         action = st.session_state.pop("pending_action")
-        if action == "save_next":
-            # Save and move to next
-            try:
-                card = st.session_state.current_cards[st.session_state.current_card_index]
-                deck_id = card.get("deck-id")
-                feynman_deck_id = run_async(
-                    mochi.get_or_create_feynman_subdeck(
-                        st.session_state.mochi_key,
-                        deck_id,
-                        st.session_state.decks,
-                    )
-                )
-                card_content = ai.build_feynman_card_content(
-                    st.session_state.original_question,
-                    st.session_state.original_answer,
-                    st.session_state.rephrased_question,
-                    card.get("id", "unknown"),
-                )
-                run_async(mochi.create_card(
-                    st.session_state.mochi_key,
-                    feynman_deck_id,
-                    card_content,
-                    tags=["feynman", "rephrased"],
-                ))
-            except:
-                pass
+        if action == "next" or action == "skip":
             st.session_state.current_card_index += 1
             st.session_state.rephrased_question = ""
             st.session_state.review_state = "question"
             st.session_state.conversation_history = []
-            st.session_state.follow_up_count = 0
-            st.session_state.pop("played_question", None)
-            st.session_state.pop("played_feedback", None)
-            if st.session_state.current_card_index >= len(st.session_state.current_cards):
-                st.session_state.review_state = "complete"
-            st.rerun()
-        elif action == "skip":
-            st.session_state.current_card_index += 1
-            st.session_state.rephrased_question = ""
-            st.session_state.review_state = "question"
-            st.session_state.conversation_history = []
+            st.session_state.chat_messages = []
             st.session_state.follow_up_count = 0
             st.session_state.pop("played_question", None)
             st.session_state.pop("played_feedback", None)
@@ -630,7 +591,8 @@ if st.session_state.review_state == "evaluating":
             st.session_state.pop("played_feedback", None)
             st.rerun()
     
-    col1, col2, col3 = st.columns(3)
+    # Navigation buttons
+    col1, col2 = st.columns(2)
     
     # If there's a follow-up and we haven't hit the limit
     if follow_up and not is_correct and st.session_state.follow_up_count < max_follow_ups:
@@ -642,70 +604,188 @@ if st.session_state.review_state == "evaluating":
                 st.rerun()
     
     with col2:
-        if st.button("Save & Next Card", use_container_width=True):
-            # Save rephrased card to Feynman subdeck
-            with st.spinner("Saving to Feynman deck..."):
-                try:
-                    card = st.session_state.current_cards[st.session_state.current_card_index]
-                    deck_id = card.get("deck-id")
-                    
-                    # Get or create Feynman subdeck
-                    feynman_deck_id = run_async(
-                        mochi.get_or_create_feynman_subdeck(
-                            st.session_state.mochi_key,
-                            deck_id,
-                            st.session_state.decks,
-                        )
-                    )
-                    
-                    # Build card content
-                    card_content = ai.build_feynman_card_content(
-                        st.session_state.original_question,
-                        st.session_state.original_answer,
-                        st.session_state.rephrased_question,
-                        card.get("id", "unknown"),
-                    )
-                    
-                    # Create the card
-                    run_async(mochi.create_card(
-                        st.session_state.mochi_key,
-                        feynman_deck_id,
-                        card_content,
-                        tags=["feynman", "rephrased"],
-                    ))
-                    
-                    st.success("Card saved to Feynman deck!")
-                except Exception as e:
-                    st.error(f"Failed to save: {e}")
-            
-            # Move to next card
+        if st.button("➡️ Next Card", use_container_width=True):
             st.session_state.current_card_index += 1
             st.session_state.rephrased_question = ""
             st.session_state.review_state = "question"
             st.session_state.conversation_history = []
-            st.session_state.follow_up_count = 0
-            st.session_state.pop("played_question", None)
-            
-            if st.session_state.current_card_index >= len(st.session_state.current_cards):
-                st.session_state.review_state = "complete"
-            st.rerun()
-    
-    with col3:
-        if st.button("Skip (Don't Save)", use_container_width=True):
-            st.session_state.current_card_index += 1
-            st.session_state.rephrased_question = ""
-            st.session_state.review_state = "question"
-            st.session_state.conversation_history = []
+            st.session_state.chat_messages = []
             st.session_state.follow_up_count = 0
             st.session_state.pop("played_question", None)
             st.session_state.pop("played_feedback", None)
+            st.session_state.pop("pending_card_suggestion", None)
             
             if st.session_state.current_card_index >= len(st.session_state.current_cards):
                 st.session_state.review_state = "complete"
             st.rerun()
     
-    # Expand concepts section
+    # ============ Chat Interface ============
     st.divider()
+    st.subheader("💬 Chat & Explore")
+    st.caption("Ask follow-up questions, clarify concepts, or discuss modifications")
+    
+    # Initialize chat messages in session state
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    
+    # Display chat history
+    for msg in st.session_state.chat_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+    
+    # Chat input
+    chat_input = st.chat_input("Ask a question about this topic...")
+    
+    if chat_input:
+        # Add user message
+        st.session_state.chat_messages.append({"role": "user", "content": chat_input})
+        
+        # Get AI response
+        with st.spinner("Thinking..."):
+            try:
+                response = ai.chat_followup(
+                    st.session_state.openai_key,
+                    st.session_state.chat_messages,
+                    st.session_state.original_question,
+                    st.session_state.original_answer,
+                    chat_input,
+                )
+                st.session_state.chat_messages.append({"role": "assistant", "content": response})
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+    
+    # ============ Card Actions ============
+    st.divider()
+    with st.expander("✏️ Modify or Add Cards", expanded=False):
+        st.caption("Update this card or create a new one based on your learning")
+        
+        card = st.session_state.current_cards[st.session_state.current_card_index]
+        deck_id = card.get("deck-id")
+        card_id = card.get("id", "unknown")
+        
+        col_mod, col_add = st.columns(2)
+        
+        with col_mod:
+            if st.button("📝 Suggest Modification", use_container_width=True):
+                with st.spinner("Analyzing conversation..."):
+                    try:
+                        suggestion = ai.suggest_card_modification(
+                            st.session_state.openai_key,
+                            st.session_state.original_question,
+                            st.session_state.original_answer,
+                            st.session_state.chat_messages,
+                        )
+                        st.session_state.pending_modification = suggestion
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+        
+        with col_add:
+            if st.button("➕ Suggest New Card", use_container_width=True):
+                with st.spinner("Creating new card suggestion..."):
+                    try:
+                        suggestion = ai.suggest_new_card(
+                            st.session_state.openai_key,
+                            st.session_state.original_question,
+                            st.session_state.original_answer,
+                            st.session_state.chat_messages,
+                        )
+                        st.session_state.pending_new_card = suggestion
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+        
+        # Show modification suggestion
+        if "pending_modification" in st.session_state and st.session_state.pending_modification:
+            st.subheader("Suggested Modification")
+            mod = st.session_state.pending_modification
+            
+            st.markdown("**Question:**")
+            mod_question = st.text_area(
+                "Edit question",
+                value=mod.get("question", st.session_state.original_question),
+                key="mod_question",
+                label_visibility="collapsed",
+            )
+            
+            st.markdown("**Answer:**")
+            mod_answer = st.text_area(
+                "Edit answer",
+                value=mod.get("answer", st.session_state.original_answer),
+                key="mod_answer",
+                label_visibility="collapsed",
+            )
+            
+            col_save_mod, col_cancel_mod = st.columns(2)
+            with col_save_mod:
+                if st.button("💾 Save Changes to Card", type="primary", use_container_width=True):
+                    with st.spinner("Updating card..."):
+                        try:
+                            new_content = f"{mod_question}\n\n---\n\n{mod_answer}"
+                            run_async(mochi.update_card_content(
+                                st.session_state.mochi_key,
+                                card_id,
+                                new_content,
+                            ))
+                            st.success("Card updated!")
+                            st.session_state.pending_modification = None
+                            # Update local copy
+                            st.session_state.original_question = mod_question
+                            st.session_state.original_answer = mod_answer
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error updating card: {e}")
+            
+            with col_cancel_mod:
+                if st.button("❌ Cancel", key="cancel_mod", use_container_width=True):
+                    st.session_state.pending_modification = None
+                    st.rerun()
+        
+        # Show new card suggestion
+        if "pending_new_card" in st.session_state and st.session_state.pending_new_card:
+            st.subheader("New Card Preview")
+            new_card = st.session_state.pending_new_card
+            
+            st.markdown("**Question:**")
+            new_question = st.text_area(
+                "Edit question",
+                value=new_card.get("question", ""),
+                key="new_question",
+                label_visibility="collapsed",
+            )
+            
+            st.markdown("**Answer:**")
+            new_answer = st.text_area(
+                "Edit answer",
+                value=new_card.get("answer", ""),
+                key="new_answer",
+                label_visibility="collapsed",
+            )
+            
+            col_save_new, col_cancel_new = st.columns(2)
+            with col_save_new:
+                if st.button("💾 Add Card to Deck", type="primary", use_container_width=True):
+                    with st.spinner("Creating card..."):
+                        try:
+                            card_content = f"{new_question}\n\n---\n\n{new_answer}"
+                            run_async(mochi.create_card(
+                                st.session_state.mochi_key,
+                                deck_id,
+                                card_content,
+                            ))
+                            st.success("New card created!")
+                            st.session_state.pending_new_card = None
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error creating card: {e}")
+            
+            with col_cancel_new:
+                if st.button("❌ Cancel", key="cancel_new", use_container_width=True):
+                    st.session_state.pending_new_card = None
+                    st.rerun()
+    
+    # Expand concepts section
     with st.expander("🔬 Expand on concepts", expanded=False):
         st.caption("Generate new cards that dive deeper into concepts from this card")
         
@@ -751,22 +831,13 @@ if st.session_state.review_state == "evaluating":
                         cards_to_save.append(exp_card)
             
             if st.button("Save Selected Expansion Cards", type="primary", use_container_width=True):
-                with st.spinner("Saving expansion cards to Feynman deck..."):
+                with st.spinner("Saving expansion cards..."):
                     try:
                         card = st.session_state.current_cards[st.session_state.current_card_index]
                         deck_id = card.get("deck-id")
                         card_id = card.get("id", "unknown")
                         
-                        # Get or create Feynman subdeck
-                        feynman_deck_id = run_async(
-                            mochi.get_or_create_feynman_subdeck(
-                                st.session_state.mochi_key,
-                                deck_id,
-                                st.session_state.decks,
-                            )
-                        )
-                        
-                        # Create each expansion card
+                        # Create each expansion card in the same deck
                         created_ids = []
                         for exp_card in cards_to_save:
                             card_content = ai.build_expansion_card_content(
@@ -778,9 +849,9 @@ if st.session_state.review_state == "evaluating":
                             
                             new_card = run_async(mochi.create_card(
                                 st.session_state.mochi_key,
-                                feynman_deck_id,
+                                deck_id,
                                 card_content,
-                                tags=["feynman", "expansion"],
+                                tags=["expansion"],
                             ))
                             created_ids.append(new_card.get("id", "unknown"))
                         
@@ -821,4 +892,5 @@ if st.session_state.review_state == "complete":
         st.session_state.current_card_index = 0
         st.session_state.rephrased_question = ""
         st.session_state.conversation_history = []
+        st.session_state.chat_messages = []
         st.rerun()

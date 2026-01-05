@@ -172,46 +172,6 @@ async def get_card(api_key: str, card_id: str) -> dict:
         return response.json()
 
 
-async def get_or_create_feynman_subdeck(
-    api_key: str, 
-    parent_deck_id: str,
-    decks: Optional[list[dict]] = None
-) -> str:
-    """
-    Get or create a "Feynman" subdeck under the given parent deck.
-    
-    Args:
-        api_key: Mochi API key
-        parent_deck_id: The parent deck ID
-        decks: Optional pre-fetched list of decks to avoid extra API call
-        
-    Returns:
-        The Feynman subdeck ID
-    """
-    if decks is None:
-        decks = await get_decks(api_key)
-    
-    # Look for existing Feynman subdeck under this parent
-    for deck in decks:
-        if deck.get("parent-id") == parent_deck_id and deck.get("name") == "Feynman":
-            return deck["id"]
-    
-    # Create new Feynman subdeck
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{BASE_URL}/decks",
-            headers=_get_headers(api_key),
-            json={
-                "name": "Feynman",
-                "parent-id": parent_deck_id,
-            },
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["id"]
-
-
 async def create_card(
     api_key: str,
     deck_id: str,
