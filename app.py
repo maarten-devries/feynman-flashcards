@@ -265,9 +265,12 @@ if st.session_state.review_state == "idle":
         st.warning("No decks found in your Mochi account")
         st.stop()
     
+    # Sort deck options alphabetically
+    sorted_deck_names = sorted(deck_options.keys())
+    
     selected_display = st.selectbox(
         "Choose a deck to review",
-        options=list(deck_options.keys()),
+        options=sorted_deck_names,
     )
     
     selected_deck_id = deck_options[selected_display]
