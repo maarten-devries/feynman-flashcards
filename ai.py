@@ -1,24 +1,36 @@
-"""
-OpenAI Service Module
+"""AI Service Module
 
 Provides functions for:
 - Rephrasing flashcard questions
 - Evaluating user answers with Socratic follow-ups
 - Speech-to-text transcription
 - Text-to-speech synthesis
+
+Supports both OpenAI and Anthropic (Claude) APIs.
 """
 
 import json
 from openai import OpenAI
-from typing import Optional
+import anthropic
+from typing import Optional, Union
 
 
-def get_client(api_key: str) -> OpenAI:
+def get_openai_client(api_key: str) -> OpenAI:
     """Create OpenAI client with user's API key."""
     return OpenAI(api_key=api_key)
 
 
-async def validate_api_key(api_key: str) -> tuple[bool, str]:
+def get_anthropic_client(api_key: str) -> anthropic.Anthropic:
+    """Create Anthropic client with user's API key."""
+    return anthropic.Anthropic(api_key=api_key)
+
+
+def get_client(api_key: str) -> OpenAI:
+    """Create OpenAI client with user's API key (legacy support)."""
+    return OpenAI(api_key=api_key)
+
+
+async def validate_openai_key(api_key: str) -> tuple[bool, str]:
     """
     Validate an OpenAI API key by listing models.
     
@@ -26,7 +38,7 @@ async def validate_api_key(api_key: str) -> tuple[bool, str]:
         (success, message) tuple
     """
     try:
-        client = get_client(api_key)
+        client = get_openai_client(api_key)
         # Simple validation - list models
         client.models.list()
         return True, "Connected to OpenAI"
@@ -35,6 +47,33 @@ async def validate_api_key(api_key: str) -> tuple[bool, str]:
         if "invalid_api_key" in error_msg.lower() or "401" in error_msg:
             return False, "Invalid API key"
         return False, f"Connection error: {error_msg[:100]}"
+
+
+async def validate_anthropic_key(api_key: str) -> tuple[bool, str]:
+    """
+    Validate an Anthropic API key by making a simple request.
+    
+    Returns:
+        (success, message) tuple
+    """
+    try:
+        client = get_anthropic_client(api_key)
+        # Simple validation - count tokens (lightweight request)
+        client.messages.count_tokens(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "test"}],
+        )
+        return True, "Connected to Anthropic"
+    except anthropic.AuthenticationError:
+        return False, "Invalid API key"
+    except Exception as e:
+        error_msg = str(e)
+        return False, f"Connection error: {error_msg[:100]}"
+
+
+async def validate_api_key(api_key: str) -> tuple[bool, str]:
+    """Legacy function - validates OpenAI key."""
+    return await validate_openai_key(api_key)
 
 
 def parse_card_content(content: str) -> tuple[str, str]:
@@ -68,7 +107,13 @@ def parse_card_content(content: str) -> tuple[str, str]:
     return question, answer
 
 
-def rephrase_question(api_key: str, question: str, answer: str, context: str = "") -> str:
+def rephrase_question(
+    api_key: str,
+    question: str,
+    answer: str,
+    context: str = "",
+    provider: str = "openai",
+) -> str:
     """
     Generate a rephrased version of a flashcard question.
     
@@ -76,16 +121,15 @@ def rephrase_question(api_key: str, question: str, answer: str, context: str = "
     different wording, context, or framing to prevent pattern memorization.
     
     Args:
-        api_key: OpenAI API key
+        api_key: API key for the selected provider
         question: Original question from the card
         answer: Expected answer (to preserve difficulty)
         context: Optional additional context about the topic
+        provider: "openai" or "anthropic"
         
     Returns:
         Rephrased question string
     """
-    client = get_client(api_key)
-    
     system_prompt = """You are an expert educator helping students deeply understand concepts.
 
 Your task is to rephrase flashcard questions to test the SAME concept but with different wording.
@@ -109,17 +153,27 @@ Expected Answer: {answer}
 
 Provide ONLY the rephrased question, nothing else."""
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.8,
-        max_tokens=300,
-    )
-    
-    return response.choices[0].message.content.strip()
+    if provider == "anthropic":
+        client = get_anthropic_client(api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return response.content[0].text.strip()
+    else:
+        client = get_openai_client(api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.8,
+            max_tokens=300,
+        )
+        return response.choices[0].message.content.strip()
 
 
 def evaluate_answer(
@@ -128,16 +182,18 @@ def evaluate_answer(
     expected_answer: str,
     user_answer: str,
     conversation_history: Optional[list[dict]] = None,
+    provider: str = "openai",
 ) -> dict:
     """
     Evaluate a user's answer and provide Socratic feedback.
     
     Args:
-        api_key: OpenAI API key
+        api_key: API key for the selected provider
         question: The question that was asked
         expected_answer: The correct/expected answer
         user_answer: What the user provided
         conversation_history: Previous exchanges for follow-up context
+        provider: "openai" or "anthropic"
         
     Returns:
         Dict with:
@@ -146,8 +202,6 @@ def evaluate_answer(
         - feedback: str - explanation of what's right/wrong
         - follow_up: str|None - follow-up question if needed
     """
-    client = get_client(api_key)
-    
     system_prompt = """You are a Socratic tutor evaluating student understanding.
 
 Your role is to:
@@ -166,34 +220,43 @@ Respond in JSON format:
     "follow_up": "A follow-up question if needed, or null if understanding is complete"
 }"""
 
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    # Add conversation history if this is a follow-up
+    # Build conversation history context
+    history_text = ""
     if conversation_history:
         for entry in conversation_history:
-            messages.append({"role": "assistant", "content": json.dumps(entry["evaluation"])})
-            messages.append({"role": "user", "content": f"Student's response: {entry['user_answer']}"})
-    
-    # Current evaluation request
+            history_text += f"\nPrevious evaluation: {json.dumps(entry['evaluation'])}"
+            history_text += f"\nStudent responded: {entry['user_answer']}\n"
+
     user_prompt = f"""Question asked: {question}
 
 Expected answer: {expected_answer}
 
 Student's answer: {user_answer}
-
+{history_text}
 Evaluate this answer and respond in JSON format."""
 
-    messages.append({"role": "user", "content": user_prompt})
-    
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        temperature=0.3,
-        max_tokens=500,
-        response_format={"type": "json_object"},
-    )
-    
-    result = json.loads(response.choices[0].message.content)
+    if provider == "anthropic":
+        client = get_anthropic_client(api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        result = json.loads(response.content[0].text)
+    else:
+        client = get_openai_client(api_key)
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.append({"role": "user", "content": user_prompt})
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.3,
+            max_tokens=500,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
     
     # Ensure all expected fields exist
     return {
@@ -264,22 +327,22 @@ def chat_followup(
     original_question: str,
     original_answer: str,
     user_message: str,
+    provider: str = "openai",
 ) -> str:
     """
     Continue a conversation about the flashcard topic.
     
     Args:
-        api_key: OpenAI API key
+        api_key: API key for the selected provider
         conversation_history: Previous messages in the conversation
         original_question: The card's question
         original_answer: The card's answer
         user_message: The user's follow-up question
+        provider: "openai" or "anthropic"
         
     Returns:
         AI response as string
     """
-    client = get_client(api_key)
-    
     system_prompt = f"""You are a Socratic tutor helping someone deeply understand a topic.
 
 Context - The flashcard being studied:
@@ -292,22 +355,34 @@ give examples, and help them build intuition. Be concise but thorough.
 If they ask to modify or improve the card, suggest specific improvements to the question or answer.
 If they want to create a new card, help them formulate a clear question and answer."""
 
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    # Add conversation history (limit to avoid token overflow)
-    for msg in conversation_history[-10:]:
-        messages.append(msg)
-    
-    messages.append({"role": "user", "content": user_message})
-    
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        temperature=0.7,
-        max_tokens=1000,
-    )
-    
-    return response.choices[0].message.content
+    if provider == "anthropic":
+        client = get_anthropic_client(api_key)
+        messages = []
+        for msg in conversation_history[-10:]:
+            messages.append(msg)
+        messages.append({"role": "user", "content": user_message})
+        
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system=system_prompt,
+            messages=messages,
+        )
+        return response.content[0].text
+    else:
+        client = get_openai_client(api_key)
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in conversation_history[-10:]:
+            messages.append(msg)
+        messages.append({"role": "user", "content": user_message})
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1000,
+        )
+        return response.choices[0].message.content
 
 
 def suggest_card_modification(
@@ -315,15 +390,17 @@ def suggest_card_modification(
     original_question: str,
     original_answer: str,
     conversation_history: list[dict],
+    provider: str = "openai",
 ) -> dict:
     """
     Suggest an improved version of the card based on the conversation.
     
+    Args:
+        provider: "openai" or "anthropic"
+    
     Returns:
         Dict with 'question' and 'answer' keys
     """
-    client = get_client(api_key)
-    
     # Format conversation for context
     convo_text = "\n".join([
         f"{'User' if m['role'] == 'user' else 'Tutor'}: {m['content']}"
@@ -339,25 +416,36 @@ Consider:
 Return a JSON object with 'question' and 'answer' keys.
 Only suggest changes if they genuinely improve the card."""
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"""Original card:
+    user_prompt = f"""Original card:
 Question: {original_question}
 Answer: {original_answer}
 
 Conversation:
 {convo_text}
 
-Suggest an improved version (or return the original if no changes needed):"""}
-        ],
-        temperature=0.3,
-        response_format={"type": "json_object"},
-    )
-    
-    import json
-    return json.loads(response.choices[0].message.content)
+Suggest an improved version (or return the original if no changes needed):"""
+
+    if provider == "anthropic":
+        client = get_anthropic_client(api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return json.loads(response.content[0].text)
+    else:
+        client = get_openai_client(api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+        return json.loads(response.choices[0].message.content)
 
 
 def suggest_new_card(
@@ -366,15 +454,17 @@ def suggest_new_card(
     original_answer: str,
     conversation_history: list[dict],
     user_request: str = "",
+    provider: str = "openai",
 ) -> dict:
     """
     Suggest a new card based on the conversation.
     
+    Args:
+        provider: "openai" or "anthropic"
+    
     Returns:
         Dict with 'question' and 'answer' keys
     """
-    client = get_client(api_key)
-    
     # Format conversation for context
     convo_text = "\n".join([
         f"{'User' if m['role'] == 'user' else 'Tutor'}: {m['content']}"
@@ -403,18 +493,27 @@ Conversation:
     
     user_prompt += "\n\nCreate a new flashcard:"
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        temperature=0.5,
-        response_format={"type": "json_object"},
-    )
-    
-    import json
-    return json.loads(response.choices[0].message.content)
+    if provider == "anthropic":
+        client = get_anthropic_client(api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return json.loads(response.content[0].text)
+    else:
+        client = get_openai_client(api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.5,
+            response_format={"type": "json_object"},
+        )
+        return json.loads(response.choices[0].message.content)
 
 
 def generate_expansion_cards(
@@ -423,22 +522,22 @@ def generate_expansion_cards(
     answer: str,
     concept_to_expand: str = "",
     num_cards: int = 3,
+    provider: str = "openai",
 ) -> list[dict]:
     """
     Generate new flashcards that expand on concepts from the current card.
     
     Args:
-        api_key: OpenAI API key
+        api_key: API key for the selected provider
         question: The current card's question
         answer: The current card's answer
         concept_to_expand: Specific concept to expand (if empty, AI chooses)
         num_cards: Number of expansion cards to generate
+        provider: "openai" or "anthropic"
         
     Returns:
         List of dicts with 'question' and 'answer' keys
     """
-    client = get_client(api_key)
-    
     system_prompt = """You are an expert educator creating flashcards to deepen understanding.
 
 Given a flashcard, generate new cards that:
@@ -469,18 +568,29 @@ Answer: {answer}
 
 Generate cards that would help someone deeply understand this material."""
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.7,
-        max_tokens=1500,
-        response_format={"type": "json_object"},
-    )
+    if provider == "anthropic":
+        client = get_anthropic_client(api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1500,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        result = json.loads(response.content[0].text)
+    else:
+        client = get_openai_client(api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.7,
+            max_tokens=1500,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
     
-    result = json.loads(response.choices[0].message.content)
     return result.get("cards", [])
 
 

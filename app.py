@@ -67,10 +67,16 @@ if "mochi_key" not in st.session_state:
     st.session_state.mochi_key = os.getenv("MOCHI_API_KEY", "")
 if "openai_key" not in st.session_state:
     st.session_state.openai_key = os.getenv("OPENAI_API_KEY", "")
+if "anthropic_key" not in st.session_state:
+    st.session_state.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+if "ai_provider" not in st.session_state:
+    st.session_state.ai_provider = "openai"
 if "mochi_valid" not in st.session_state:
     st.session_state.mochi_valid = False
 if "openai_valid" not in st.session_state:
     st.session_state.openai_valid = False
+if "anthropic_valid" not in st.session_state:
+    st.session_state.anthropic_valid = False
 if "decks" not in st.session_state:
     st.session_state.decks = []
 if "deck_tree" not in st.session_state:
@@ -128,11 +134,17 @@ with st.sidebar:
         
         stored_mochi = local_storage.getItem("mochi_key")
         stored_openai = local_storage.getItem("openai_key")
+        stored_anthropic = local_storage.getItem("anthropic_key")
+        stored_provider = local_storage.getItem("ai_provider")
         
         if stored_mochi and not st.session_state.mochi_key:
             st.session_state.mochi_key = stored_mochi
         if stored_openai and not st.session_state.openai_key:
             st.session_state.openai_key = stored_openai
+        if stored_anthropic and not st.session_state.anthropic_key:
+            st.session_state.anthropic_key = stored_anthropic
+        if stored_provider and st.session_state.ai_provider == "openai":
+            st.session_state.ai_provider = stored_provider
     except Exception:
         local_storage = None
     
@@ -144,24 +156,62 @@ with st.sidebar:
         help="Get your key at app.mochi.cards → Settings → API",
     )
     
-    # OpenAI API Key  
-    openai_key = st.text_input(
-        "OpenAI API Key",
-        value=st.session_state.openai_key,
-        type="password",
-        help="Get your key at platform.openai.com/api-keys",
+    # AI Provider selection
+    st.divider()
+    st.subheader("🤖 AI Provider")
+    ai_provider = st.radio(
+        "Select AI Provider",
+        options=["openai", "anthropic"],
+        format_func=lambda x: "OpenAI (GPT-4o)" if x == "openai" else "Anthropic (Claude)",
+        index=0 if st.session_state.ai_provider == "openai" else 1,
+        horizontal=True,
+        label_visibility="collapsed",
     )
+    st.session_state.ai_provider = ai_provider
+    
+    # Show appropriate API key input based on provider
+    if ai_provider == "openai":
+        openai_key = st.text_input(
+            "OpenAI API Key",
+            value=st.session_state.openai_key,
+            type="password",
+            help="Get your key at platform.openai.com/api-keys",
+        )
+        anthropic_key = st.session_state.anthropic_key
+    else:
+        anthropic_key = st.text_input(
+            "Anthropic API Key",
+            value=st.session_state.anthropic_key,
+            type="password",
+            help="Get your key at console.anthropic.com/settings/keys",
+        )
+        openai_key = st.session_state.openai_key
+    
+    # Note about voice features
+    if ai_provider == "anthropic":
+        st.caption("ℹ️ Voice features use OpenAI (add key above for TTS/STT)")
+        openai_voice_key = st.text_input(
+            "OpenAI Key (for voice)",
+            value=st.session_state.openai_key,
+            type="password",
+            help="Required for voice mode (text-to-speech & speech-to-text)",
+        )
+        openai_key = openai_voice_key
     
     # Validate button
     if st.button("Connect", use_container_width=True):
         st.session_state.mochi_key = mochi_key
         st.session_state.openai_key = openai_key
+        st.session_state.anthropic_key = anthropic_key
+        st.session_state.ai_provider = ai_provider
         
         # Save to local storage
         if local_storage:
             try:
                 local_storage.setItem("mochi_key", mochi_key)
                 local_storage.setItem("openai_key", openai_key)
+                local_storage.setItem("anthropic_key", anthropic_key)
+                local_storage.setItem("ai_provider", ai_provider)
             except Exception:
                 pass
         
@@ -177,14 +227,30 @@ with st.sidebar:
             else:
                 st.error(mochi_msg)
         
-        # Validate OpenAI
-        with st.spinner("Validating OpenAI..."):
-            openai_ok, openai_msg = run_async(ai.validate_api_key(openai_key))
-            st.session_state.openai_valid = openai_ok
-            if openai_ok:
-                st.success(openai_msg)
-            else:
-                st.error(openai_msg)
+        # Validate AI provider
+        if ai_provider == "openai":
+            with st.spinner("Validating OpenAI..."):
+                openai_ok, openai_msg = run_async(ai.validate_openai_key(openai_key))
+                st.session_state.openai_valid = openai_ok
+                st.session_state.anthropic_valid = False
+                if openai_ok:
+                    st.success(openai_msg)
+                else:
+                    st.error(openai_msg)
+        else:
+            with st.spinner("Validating Anthropic..."):
+                anthropic_ok, anthropic_msg = run_async(ai.validate_anthropic_key(anthropic_key))
+                st.session_state.anthropic_valid = anthropic_ok
+                st.session_state.openai_valid = False
+                if anthropic_ok:
+                    st.success(anthropic_msg)
+                else:
+                    st.error(anthropic_msg)
+            # Also validate OpenAI if provided (for voice features)
+            if openai_key:
+                with st.spinner("Validating OpenAI (voice)..."):
+                    openai_ok, _ = run_async(ai.validate_openai_key(openai_key))
+                    st.session_state.openai_valid = openai_ok
     
     # Status indicators
     st.divider()
@@ -195,10 +261,17 @@ with st.sidebar:
         else:
             st.error("Mochi ✗", icon="❌")
     with col2:
-        if st.session_state.openai_valid:
-            st.success("OpenAI ✓", icon="✅")
+        # Show status for the selected provider
+        if st.session_state.ai_provider == "openai":
+            if st.session_state.openai_valid:
+                st.success("OpenAI ✓", icon="✅")
+            else:
+                st.error("OpenAI ✗", icon="❌")
         else:
-            st.error("OpenAI ✗", icon="❌")
+            if st.session_state.anthropic_valid:
+                st.success("Claude ✓", icon="✅")
+            else:
+                st.error("Claude ✗", icon="❌")
     
     # Voice mode toggles
     st.divider()
@@ -224,6 +297,7 @@ with st.sidebar:
     st.caption("Need API keys?")
     st.markdown("[Get Mochi key](https://mochi.cards)")
     st.markdown("[Get OpenAI key](https://platform.openai.com/api-keys)")
+    st.markdown("[Get Anthropic key](https://console.anthropic.com/settings/keys)")
 
 
 # ============ Main Content ============
@@ -242,9 +316,21 @@ with st.expander("⌨️ Keyboard shortcuts", expanded=False):
     """)
 
 # Check if connected
-if not (st.session_state.mochi_valid and st.session_state.openai_valid):
+ai_valid = (
+    (st.session_state.ai_provider == "openai" and st.session_state.openai_valid) or
+    (st.session_state.ai_provider == "anthropic" and st.session_state.anthropic_valid)
+)
+if not (st.session_state.mochi_valid and ai_valid):
     st.info("👈 Enter your API keys in the sidebar to get started")
     st.stop()
+
+
+# Helper to get current AI key and provider
+def get_ai_config():
+    """Return (api_key, provider) tuple for current AI provider."""
+    if st.session_state.ai_provider == "anthropic":
+        return st.session_state.anthropic_key, "anthropic"
+    return st.session_state.openai_key, "openai"
 
 
 # ============ Deck Selection ============
@@ -321,10 +407,12 @@ def start_new_card():
     
     # Generate rephrased question
     with st.spinner("Rephrasing question..."):
+        ai_key, ai_provider = get_ai_config()
         rephrased = ai.rephrase_question(
-            st.session_state.openai_key,
+            ai_key,
             question,
             answer,
+            provider=ai_provider,
         )
         st.session_state.rephrased_question = rephrased
     
@@ -471,12 +559,14 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
             else:
                 current_question = st.session_state.rephrased_question
             
+            ai_key, ai_provider = get_ai_config()
             evaluation = ai.evaluate_answer(
-                st.session_state.openai_key,
+                ai_key,
                 current_question,
                 st.session_state.original_answer,
                 user_answer,
                 st.session_state.conversation_history if st.session_state.conversation_history else None,
+                provider=ai_provider,
             )
             
             # Store in history
@@ -643,12 +733,14 @@ if st.session_state.review_state == "evaluating":
         # Get AI response
         with st.spinner("Thinking..."):
             try:
+                ai_key, ai_provider = get_ai_config()
                 response = ai.chat_followup(
-                    st.session_state.openai_key,
+                    ai_key,
                     st.session_state.chat_messages,
                     st.session_state.original_question,
                     st.session_state.original_answer,
                     chat_input,
+                    provider=ai_provider,
                 )
                 st.session_state.chat_messages.append({"role": "assistant", "content": response})
                 st.rerun()
@@ -670,11 +762,13 @@ if st.session_state.review_state == "evaluating":
             if st.button("📝 Suggest Modification", use_container_width=True):
                 with st.spinner("Analyzing conversation..."):
                     try:
+                        ai_key, ai_provider = get_ai_config()
                         suggestion = ai.suggest_card_modification(
-                            st.session_state.openai_key,
+                            ai_key,
                             st.session_state.original_question,
                             st.session_state.original_answer,
                             st.session_state.chat_messages,
+                            provider=ai_provider,
                         )
                         st.session_state.pending_modification = suggestion
                         st.rerun()
@@ -685,11 +779,13 @@ if st.session_state.review_state == "evaluating":
             if st.button("➕ Suggest New Card", use_container_width=True):
                 with st.spinner("Creating new card suggestion..."):
                     try:
+                        ai_key, ai_provider = get_ai_config()
                         suggestion = ai.suggest_new_card(
-                            st.session_state.openai_key,
+                            ai_key,
                             st.session_state.original_question,
                             st.session_state.original_answer,
                             st.session_state.chat_messages,
+                            provider=ai_provider,
                         )
                         st.session_state.pending_new_card = suggestion
                         st.rerun()
@@ -800,12 +896,14 @@ if st.session_state.review_state == "evaluating":
         if st.button("Generate Expansion Cards", type="secondary", use_container_width=True):
             with st.spinner("Generating expansion cards..."):
                 try:
+                    ai_key, ai_provider = get_ai_config()
                     expansion_cards = ai.generate_expansion_cards(
-                        st.session_state.openai_key,
+                        ai_key,
                         st.session_state.original_question,
                         st.session_state.original_answer,
                         concept_to_expand=concept_input,
                         num_cards=num_expansion,
+                        provider=ai_provider,
                     )
                     
                     if expansion_cards:
