@@ -6,6 +6,7 @@ All functions accept an API key as parameter (never from env) for security.
 """
 
 import httpx
+import re
 from base64 import b64encode
 from typing import Optional
 
@@ -114,6 +115,44 @@ async def get_due_cards(api_key: str, deck_id: Optional[str] = None) -> list[dic
         data = response.json()
         
         return data.get("cards", [])
+
+
+async def get_cards_by_deck(api_key: str, deck_id: str) -> list[dict]:
+    """
+    Fetch all cards from a specific deck.
+    
+    Args:
+        api_key: Mochi API key
+        deck_id: Deck ID to fetch cards from
+        
+    Returns:
+        List of all card objects in the deck
+    """
+    cards = []
+    bookmark = None
+    
+    async with httpx.AsyncClient() as client:
+        while True:
+            url = f"{BASE_URL}/cards?deck-id={deck_id}&limit=100"
+            if bookmark:
+                url += f"&bookmark={bookmark}"
+            
+            response = await client.get(
+                url,
+                headers=_get_headers(api_key),
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            cards.extend(data.get("docs", []))
+            
+            new_bookmark = data.get("bookmark")
+            if not new_bookmark or new_bookmark == bookmark or not data.get("docs"):
+                break
+            bookmark = new_bookmark
+    
+    return cards
 
 
 async def get_card(api_key: str, card_id: str) -> dict:
@@ -282,3 +321,65 @@ def get_deck_display_name(deck: dict, tree: dict, max_depth: int = 3) -> str:
             break
     
     return " / ".join(parts)
+
+
+async def get_attachment(api_key: str, card_id: str, filename: str) -> tuple[bytes, str]:
+    """
+    Fetch an attachment from a card.
+    
+    Args:
+        api_key: Mochi API key
+        card_id: Card ID
+        filename: Attachment filename
+        
+    Returns:
+        Tuple of (bytes, content_type)
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{BASE_URL}/cards/{card_id}/attachments/{filename}",
+            headers=_get_auth_header(api_key),
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "image/png")
+        return response.content, content_type
+
+
+async def resolve_card_images(api_key: str, card_id: str, content: str) -> str:
+    """
+    Replace @media/ references in card content with base64 data URLs.
+    
+    Args:
+        api_key: Mochi API key
+        card_id: Card ID (for fetching attachments)
+        content: Card markdown content
+        
+    Returns:
+        Content with images converted to base64 data URLs
+    """
+    # Find all @media references: ![](@media/filename) or ![alt](@media/filename)
+    pattern = r'!\[([^\]]*)\]\(@media/([^)]+)\)'
+    matches = re.findall(pattern, content)
+    
+    if not matches:
+        return content
+    
+    resolved_content = content
+    
+    for alt_text, filename in matches:
+        try:
+            image_bytes, content_type = await get_attachment(api_key, card_id, filename)
+            # Convert to base64 data URL
+            b64_data = b64encode(image_bytes).decode()
+            data_url = f"data:{content_type};base64,{b64_data}"
+            # Replace in content
+            old_ref = f"![](@media/{filename})" if not alt_text else f"![{alt_text}](@media/{filename})"
+            new_ref = f"![]({data_url})" if not alt_text else f"![{alt_text}]({data_url})"
+            resolved_content = resolved_content.replace(old_ref, new_ref)
+        except Exception as e:
+            # If we can't fetch the image, leave the reference as-is
+            print(f"Failed to fetch attachment {filename}: {e}")
+            continue
+    
+    return resolved_content

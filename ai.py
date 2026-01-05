@@ -204,7 +204,7 @@ Evaluate this answer and respond in JSON format."""
     }
 
 
-def transcribe_audio(api_key: str, audio_bytes: bytes, filename: str = "audio.webm") -> str:
+def transcribe_audio(api_key: str, audio_bytes: bytes, filename: str = "audio.wav") -> str:
     """
     Transcribe audio to text using OpenAI's speech-to-text.
     
@@ -216,12 +216,17 @@ def transcribe_audio(api_key: str, audio_bytes: bytes, filename: str = "audio.we
     Returns:
         Transcribed text
     """
+    import io
     client = get_client(api_key)
     
-    # Create a file-like object from bytes
+    # Streamlit's audio_input returns wav format
+    # Create a proper file-like object with the audio data
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = filename
+    
     response = client.audio.transcriptions.create(
-        model="gpt-4o-transcribe",
-        file=(filename, audio_bytes),
+        model="whisper-1",  # whisper-1 is more reliable for various formats
+        file=audio_file,
         response_format="text",
     )
     
@@ -283,4 +288,103 @@ def build_feynman_card_content(
 Original: {original_question}
 
 Card ID: `{source_card_id}`
+</details>"""
+
+
+def generate_expansion_cards(
+    api_key: str,
+    question: str,
+    answer: str,
+    concept_to_expand: str = "",
+    num_cards: int = 3,
+) -> list[dict]:
+    """
+    Generate new flashcards that expand on concepts from the current card.
+    
+    Args:
+        api_key: OpenAI API key
+        question: The current card's question
+        answer: The current card's answer
+        concept_to_expand: Specific concept to expand (if empty, AI chooses)
+        num_cards: Number of expansion cards to generate
+        
+    Returns:
+        List of dicts with 'question' and 'answer' keys
+    """
+    client = get_client(api_key)
+    
+    system_prompt = """You are an expert educator creating flashcards to deepen understanding.
+
+Given a flashcard, generate new cards that:
+1. Break down complex concepts into smaller pieces
+2. Explore prerequisites or foundational knowledge
+3. Connect to related concepts or applications
+4. Ask "why" and "how" questions, not just "what"
+
+Each card should be self-contained and testable.
+Keep questions concise but clear.
+Answers should be thorough but focused.
+
+Respond in JSON format:
+{
+    "cards": [
+        {"question": "...", "answer": "...", "concept": "brief concept label"},
+        ...
+    ]
+}"""
+
+    user_prompt = f"""Generate {num_cards} expansion flashcards based on this card:
+
+Question: {question}
+
+Answer: {answer}
+
+{f"Focus on expanding this concept: {concept_to_expand}" if concept_to_expand else "Choose the most important concepts to expand on."}
+
+Generate cards that would help someone deeply understand this material."""
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.7,
+        max_tokens=1500,
+        response_format={"type": "json_object"},
+    )
+    
+    result = json.loads(response.choices[0].message.content)
+    return result.get("cards", [])
+
+
+def build_expansion_card_content(
+    question: str,
+    answer: str,
+    source_card_id: str,
+    concept: str = "",
+) -> str:
+    """
+    Build markdown content for an expansion card.
+    
+    Args:
+        question: The expansion question
+        answer: The expansion answer
+        source_card_id: ID of the original card
+        concept: The concept this card expands on
+        
+    Returns:
+        Markdown string for the new card
+    """
+    return f"""{question}
+
+---
+
+{answer}
+
+<details>
+<summary>🔗 Expanded from</summary>
+
+{f"Concept: {concept}" if concept else ""}
+Source card: `{source_card_id}`
 </details>"""
