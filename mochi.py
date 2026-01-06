@@ -236,6 +236,119 @@ async def update_card_content(
         return response.json()
 
 
+def _get_transit_headers(api_key: str) -> dict:
+    """Get headers for Transit JSON API requests."""
+    return {
+        **_get_auth_header(api_key),
+        "Content-Type": "application/transit+json",
+        "Accept": "application/transit+json",
+    }
+
+
+def _build_transit_review(
+    review_date_ms: int,
+    next_due_ms: int,
+    remembered: bool,
+) -> str:
+    """
+    Build a Transit JSON payload for a review.
+    
+    Transit JSON uses special prefixes:
+    - ~: for keywords
+    - ~#dt for datetime values (Unix timestamps in milliseconds)
+    
+    Args:
+        review_date_ms: When the review happened (ms since epoch)
+        next_due_ms: When the card is next due (ms since epoch)
+        remembered: Whether the user remembered the card
+        
+    Returns:
+        Transit JSON string
+    """
+    import json
+    return json.dumps({
+        "~:reviews": [
+            {
+                "~:date": {"~#dt": review_date_ms},
+                "~:due": {"~#dt": next_due_ms},
+                "~:remembered?": remembered,
+            }
+        ]
+    })
+
+
+def calculate_next_due(
+    remembered: bool,
+    current_interval_days: int = 1,
+    ease_factor: float = 2.5,
+) -> tuple[int, int]:
+    """
+    Calculate the next due date using a simple SM-2-like algorithm.
+    
+    Args:
+        remembered: Whether the user remembered the card
+        current_interval_days: Current interval in days (default 1 for new cards)
+        ease_factor: Multiplier for intervals (default 2.5)
+        
+    Returns:
+        (next_due_timestamp_ms, new_interval_days)
+    """
+    import time
+    
+    now_ms = int(time.time() * 1000)
+    
+    if remembered:
+        # Increase interval
+        new_interval = max(1, int(current_interval_days * ease_factor))
+    else:
+        # Reset to 1 day (or could use a "relearning" interval)
+        new_interval = 1
+    
+    # Calculate next due
+    next_due_ms = now_ms + (new_interval * 24 * 60 * 60 * 1000)
+    
+    return next_due_ms, new_interval
+
+
+async def review_card(
+    api_key: str,
+    card_id: str,
+    remembered: bool,
+    current_interval_days: int = 1,
+) -> dict:
+    """
+    Mark a card as reviewed using Transit JSON format.
+    
+    This updates the card's review history and schedules the next review
+    based on spaced repetition.
+    
+    Args:
+        api_key: Mochi API key
+        card_id: Card ID to review
+        remembered: Whether the user remembered the answer
+        current_interval_days: Current interval for SRS calculation
+        
+    Returns:
+        Response from API (may be Transit JSON format)
+    """
+    import time
+    
+    now_ms = int(time.time() * 1000)
+    next_due_ms, _ = calculate_next_due(remembered, current_interval_days)
+    
+    payload = _build_transit_review(now_ms, next_due_ms, remembered)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{BASE_URL}/cards/{card_id}",
+            headers=_get_transit_headers(api_key),
+            content=payload,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return {"success": True, "remembered": remembered, "next_due_ms": next_due_ms}
+
+
 def build_deck_tree(decks: list[dict]) -> dict:
     """
     Build a tree structure from flat deck list for display.

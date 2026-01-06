@@ -630,7 +630,7 @@ if st.session_state.review_state == "evaluating":
     # Hands-free mode: voice input for navigation
     if st.session_state.hands_free_mode:
         st.divider()
-        st.info("🎤 Say 'next' to continue, 'skip' to skip, or 'continue' for follow-up")
+        st.info("🎤 Say 'got it' (remembered), 'again' (forgot), 'skip', or 'continue' for follow-up")
         
         nav_audio = st.audio_input(
             "Voice command",
@@ -647,8 +647,11 @@ if st.session_state.review_state == "evaluating":
                 nav_lower = nav_transcribed.lower().strip()
                 st.caption(f"Heard: {nav_transcribed}")
                 
-                if nav_lower in ["next", "done", "next card"]:
-                    st.session_state.pending_action = "next"
+                if nav_lower in ["got it", "good", "correct", "remembered", "yes", "next"]:
+                    st.session_state.pending_action = "remembered"
+                    st.rerun()
+                elif nav_lower in ["again", "forgot", "wrong", "no", "repeat"]:
+                    st.session_state.pending_action = "forgot"
                     st.rerun()
                 elif nav_lower in ["skip", "pass", "skip card"]:
                     st.session_state.pending_action = "skip"
@@ -680,21 +683,17 @@ if st.session_state.review_state == "evaluating":
             st.session_state.pop("played_follow_up", None)
             st.session_state.pop("played_feedback", None)
             st.rerun()
-    
-    # Navigation buttons
-    col1, col2 = st.columns(2)
-    
-    # If there's a follow-up and we haven't hit the limit
-    if follow_up and not is_correct and st.session_state.follow_up_count < max_follow_ups:
-        with col1:
-            if st.button("Continue Discussion", type="primary", use_container_width=True):
-                st.session_state.follow_up_count += 1
-                st.session_state.review_state = "follow_up"
-                st.session_state.pop("played_follow_up", None)
-                st.rerun()
-    
-    with col2:
-        if st.button("➡️ Next Card", use_container_width=True):
+        elif action == "remembered":
+            # Mark as remembered and move to next
+            card = st.session_state.current_cards[st.session_state.current_card_index]
+            try:
+                run_async(mochi.review_card(
+                    st.session_state.mochi_key,
+                    card.get("id"),
+                    remembered=True,
+                ))
+            except:
+                pass
             st.session_state.current_card_index += 1
             st.session_state.rephrased_question = ""
             st.session_state.review_state = "question"
@@ -703,10 +702,97 @@ if st.session_state.review_state == "evaluating":
             st.session_state.follow_up_count = 0
             st.session_state.pop("played_question", None)
             st.session_state.pop("played_feedback", None)
-            st.session_state.pop("pending_card_suggestion", None)
-            
             if st.session_state.current_card_index >= len(st.session_state.current_cards):
                 st.session_state.review_state = "complete"
+            st.rerun()
+        elif action == "forgot":
+            # Mark as forgot and move to next
+            card = st.session_state.current_cards[st.session_state.current_card_index]
+            try:
+                run_async(mochi.review_card(
+                    st.session_state.mochi_key,
+                    card.get("id"),
+                    remembered=False,
+                ))
+            except:
+                pass
+            st.session_state.current_card_index += 1
+            st.session_state.rephrased_question = ""
+            st.session_state.review_state = "question"
+            st.session_state.conversation_history = []
+            st.session_state.chat_messages = []
+            st.session_state.follow_up_count = 0
+            st.session_state.pop("played_question", None)
+            st.session_state.pop("played_feedback", None)
+            if st.session_state.current_card_index >= len(st.session_state.current_cards):
+                st.session_state.review_state = "complete"
+            st.rerun()
+    
+    # Continue discussion button
+    if follow_up and not is_correct and st.session_state.follow_up_count < max_follow_ups:
+        if st.button("🔄 Continue Discussion", type="secondary", use_container_width=True):
+            st.session_state.follow_up_count += 1
+            st.session_state.review_state = "follow_up"
+            st.session_state.pop("played_follow_up", None)
+            st.rerun()
+    
+    # SRS Review buttons
+    st.divider()
+    st.subheader("📊 Mark Review")
+    st.caption("Update Mochi's spaced repetition schedule")
+    
+    card = st.session_state.current_cards[st.session_state.current_card_index]
+    card_id = card.get("id")
+    
+    def move_to_next():
+        """Helper to move to next card."""
+        st.session_state.current_card_index += 1
+        st.session_state.rephrased_question = ""
+        st.session_state.review_state = "question"
+        st.session_state.conversation_history = []
+        st.session_state.chat_messages = []
+        st.session_state.follow_up_count = 0
+        st.session_state.pop("played_question", None)
+        st.session_state.pop("played_feedback", None)
+        st.session_state.pop("pending_card_suggestion", None)
+        if st.session_state.current_card_index >= len(st.session_state.current_cards):
+            st.session_state.review_state = "complete"
+    
+    col_good, col_again, col_skip = st.columns(3)
+    
+    with col_good:
+        if st.button("✅ Got it!", type="primary", use_container_width=True, help="Mark as remembered - increases interval"):
+            with st.spinner("Marking review..."):
+                try:
+                    run_async(mochi.review_card(
+                        st.session_state.mochi_key,
+                        card_id,
+                        remembered=True,
+                    ))
+                    st.toast("✅ Marked as remembered!", icon="✅")
+                except Exception as e:
+                    st.error(f"Failed to mark review: {e}")
+            move_to_next()
+            st.rerun()
+    
+    with col_again:
+        if st.button("🔁 Again", use_container_width=True, help="Mark as forgotten - resets interval"):
+            with st.spinner("Marking review..."):
+                try:
+                    run_async(mochi.review_card(
+                        st.session_state.mochi_key,
+                        card_id,
+                        remembered=False,
+                    ))
+                    st.toast("🔁 Marked for review again", icon="🔁")
+                except Exception as e:
+                    st.error(f"Failed to mark review: {e}")
+            move_to_next()
+            st.rerun()
+    
+    with col_skip:
+        if st.button("⏭️ Skip", use_container_width=True, help="Skip without marking in Mochi"):
+            move_to_next()
             st.rerun()
     
     # ============ Chat Interface ============
