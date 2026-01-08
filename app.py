@@ -602,8 +602,8 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
                 elif lower_transcribed in ["next", "continue", "go on"]:
                     voice_command_detected = "continue"
                 else:
-                    # Auto-submit after transcription in voice mode
-                    auto_submit_after_transcribe = st.session_state.voice_mode
+                    # Always auto-submit after transcription (no extra click needed)
+                    auto_submit_after_transcribe = True
                 
             except Exception as e:
                 st.error(f"Transcription error: {e}")
