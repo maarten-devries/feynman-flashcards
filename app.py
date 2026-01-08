@@ -340,6 +340,51 @@ with st.sidebar:
     if st.session_state.voice_mode:
         st.caption("Voice commands: 'skip', 'next', 'continue'")
     
+    # Deck selection (optional - for specific deck review)
+    st.divider()
+    st.subheader("📚 Review Specific Deck")
+    
+    # Build deck options
+    deck_options = {}
+    for deck in st.session_state.decks:
+        display_name = mochi.get_deck_display_name(deck, st.session_state.deck_tree)
+        deck_options[display_name] = deck["id"]
+    
+    if deck_options:
+        sorted_deck_names = sorted(deck_options.keys())
+        selected_display = st.selectbox(
+            "Choose a deck",
+            options=sorted_deck_names,
+            label_visibility="collapsed",
+        )
+        
+        selected_deck_id = deck_options[selected_display]
+        
+        review_mode = st.radio(
+            "Review mode",
+            ["Due cards only", "All cards"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        
+        if st.button("Review This Deck", use_container_width=True):
+            with st.spinner("Fetching cards..."):
+                if review_mode == "Due cards only":
+                    cards = run_async(mochi.get_due_cards(st.session_state.mochi_key, selected_deck_id))
+                else:
+                    cards = run_async(mochi.get_cards_by_deck(st.session_state.mochi_key, selected_deck_id))
+                
+                if not cards:
+                    st.info("No cards found!")
+                else:
+                    st.session_state.current_cards = cards
+                    st.session_state.current_card_index = 0
+                    st.session_state.review_state = "question"
+                    st.session_state.conversation_history = []
+                    st.session_state.follow_up_count = 0
+                    st.session_state.selected_deck_id = selected_deck_id
+                    st.rerun()
+    
     # Links
     st.divider()
     st.caption("Need API keys?")
@@ -371,76 +416,25 @@ def get_ai_config():
     return st.session_state.openai_key, "openai"
 
 
-# ============ Deck Selection ============
+# ============ Auto-start Due Cards Review ============
 
 if st.session_state.review_state == "idle":
-    st.subheader("Review Options")
-    
-    # Quick option: Review all due cards across all decks
-    st.markdown("#### 🔥 Quick Review")
-    if st.button("Review All Due Cards", type="primary", use_container_width=True):
-        with st.spinner("Fetching due cards from all decks..."):
-            cards = run_async(mochi.get_due_cards(st.session_state.mochi_key))
-            
-            if not cards:
-                st.info("🎉 No cards due for review!")
-            else:
-                st.session_state.current_cards = cards
-                st.session_state.current_card_index = 0
-                st.session_state.review_state = "question"
-                st.session_state.conversation_history = []
-                st.session_state.follow_up_count = 0
-                st.session_state.selected_deck_id = None  # All decks
-                st.rerun()
-    
-    st.divider()
-    st.markdown("#### 📚 Or Select a Specific Deck")
-    
-    # Build deck options
-    deck_options = {}
-    for deck in st.session_state.decks:
-        display_name = mochi.get_deck_display_name(deck, st.session_state.deck_tree)
-        deck_options[display_name] = deck["id"]
-    
-    if not deck_options:
-        st.warning("No decks found in your Mochi account")
-        st.stop()
-    
-    # Sort deck options alphabetically
-    sorted_deck_names = sorted(deck_options.keys())
-    
-    selected_display = st.selectbox(
-        "Choose a deck to review",
-        options=sorted_deck_names,
-    )
-    
-    selected_deck_id = deck_options[selected_display]
-    st.session_state.selected_deck_id = selected_deck_id
-    
-    # Review mode selection
-    review_mode = st.radio(
-        "Review mode",
-        ["All cards", "Due cards only"],
-        horizontal=True,
-    )
-    
-    # Fetch cards
-    if st.button("Start Deck Review", use_container_width=True):
-        with st.spinner("Fetching cards..."):
-            if review_mode == "Due cards only":
-                cards = run_async(mochi.get_due_cards(st.session_state.mochi_key, selected_deck_id))
-            else:
-                cards = run_async(mochi.get_cards_by_deck(st.session_state.mochi_key, selected_deck_id))
-            
-            if not cards:
-                st.info("🎉 No cards found in this deck!")
-            else:
-                st.session_state.current_cards = cards
-                st.session_state.current_card_index = 0
-                st.session_state.review_state = "question"
-                st.session_state.conversation_history = []
-                st.session_state.follow_up_count = 0
-                st.rerun()
+    # Auto-fetch due cards on first load
+    with st.spinner("Loading due cards..."):
+        cards = run_async(mochi.get_due_cards(st.session_state.mochi_key))
+        
+        if not cards:
+            st.success("🎉 No cards due for review!")
+            st.info("Select a specific deck from the sidebar to review all cards.")
+            st.stop()
+        else:
+            st.session_state.current_cards = cards
+            st.session_state.current_card_index = 0
+            st.session_state.review_state = "question"
+            st.session_state.conversation_history = []
+            st.session_state.follow_up_count = 0
+            st.session_state.selected_deck_id = None  # All decks
+            st.rerun()
 
 
 # ============ Review Session ============
