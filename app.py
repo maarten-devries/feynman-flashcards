@@ -162,7 +162,7 @@ with st.sidebar:
     ai_provider = st.radio(
         "Select AI Provider",
         options=["openai", "anthropic"],
-        format_func=lambda x: "OpenAI (GPT-4o)" if x == "openai" else "Anthropic (Claude)",
+        format_func=lambda x: "OpenAI (GPT-5.2)" if x == "openai" else "Anthropic (Claude)",
         index=0 if st.session_state.ai_provider == "openai" else 1,
         horizontal=True,
         label_visibility="collapsed",
@@ -336,7 +336,27 @@ def get_ai_config():
 # ============ Deck Selection ============
 
 if st.session_state.review_state == "idle":
-    st.subheader("Select a Deck")
+    st.subheader("Review Options")
+    
+    # Quick option: Review all due cards across all decks
+    st.markdown("#### 🔥 Quick Review")
+    if st.button("Review All Due Cards", type="primary", use_container_width=True):
+        with st.spinner("Fetching due cards from all decks..."):
+            cards = run_async(mochi.get_due_cards(st.session_state.mochi_key))
+            
+            if not cards:
+                st.info("🎉 No cards due for review!")
+            else:
+                st.session_state.current_cards = cards
+                st.session_state.current_card_index = 0
+                st.session_state.review_state = "question"
+                st.session_state.conversation_history = []
+                st.session_state.follow_up_count = 0
+                st.session_state.selected_deck_id = None  # All decks
+                st.rerun()
+    
+    st.divider()
+    st.markdown("#### 📚 Or Select a Specific Deck")
     
     # Build deck options
     deck_options = {}
@@ -367,7 +387,7 @@ if st.session_state.review_state == "idle":
     )
     
     # Fetch cards
-    if st.button("Start Review", type="primary", use_container_width=True):
+    if st.button("Start Deck Review", use_container_width=True):
         with st.spinner("Fetching cards..."):
             if review_mode == "Due cards only":
                 cards = run_async(mochi.get_due_cards(st.session_state.mochi_key, selected_deck_id))

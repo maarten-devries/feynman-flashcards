@@ -165,7 +165,7 @@ Provide ONLY the rephrased question, nothing else."""
     else:
         client = get_openai_client(api_key)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -250,7 +250,7 @@ Evaluate this answer and respond in JSON format."""
         messages.append({"role": "user", "content": user_prompt})
         
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=messages,
             temperature=0.3,
             max_tokens=500,
@@ -377,7 +377,7 @@ If they want to create a new card, help them formulate a clear question and answ
         messages.append({"role": "user", "content": user_message})
         
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=messages,
             temperature=0.7,
             max_tokens=1000,
@@ -437,7 +437,7 @@ Suggest an improved version (or return the original if no changes needed):"""
     else:
         client = get_openai_client(api_key)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -505,7 +505,7 @@ Conversation:
     else:
         client = get_openai_client(api_key)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -580,7 +580,7 @@ Generate cards that would help someone deeply understand this material."""
     else:
         client = get_openai_client(api_key)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
