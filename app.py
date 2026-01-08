@@ -596,14 +596,6 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
     elif audio_input and st.session_state.transcribed_answer:
         # Use cached transcription
         user_answer = st.session_state.transcribed_answer
-        st.success(f"Transcribed: {user_answer}")
-    
-    # Submit button
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        submit = st.button("Submit Answer", type="primary", use_container_width=True, disabled=not user_answer)
-    with col2:
-        skip = st.button("Skip", use_container_width=True)
     
     # Handle voice command: skip
     if voice_command_detected == "skip":
@@ -619,9 +611,53 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
             st.session_state.review_state = "complete"
         st.rerun()
     
-    # Auto-submit immediately after transcription in voice mode
+    # Auto-submit immediately after transcription (skip showing buttons)
     if auto_submit_after_transcribe and user_answer:
-        submit = True
+        st.info(f"🎤 \"{user_answer}\"")
+        with st.spinner("Evaluating your answer..."):
+            # Determine what question we're evaluating against
+            if st.session_state.review_state == "follow_up" and st.session_state.current_evaluation:
+                current_question = st.session_state.current_evaluation.get("follow_up", st.session_state.rephrased_question)
+            else:
+                current_question = st.session_state.rephrased_question
+            
+            ai_key, ai_provider = get_ai_config()
+            
+            # Include source content if enabled
+            source_content = None
+            if st.session_state.use_source and st.session_state.source_content:
+                source_content = st.session_state.source_content
+            
+            evaluation = ai.evaluate_answer(
+                ai_key,
+                current_question,
+                st.session_state.original_answer,
+                user_answer,
+                st.session_state.conversation_history if st.session_state.conversation_history else None,
+                provider=ai_provider,
+                source_content=source_content,
+            )
+            
+            # Store in history
+            st.session_state.conversation_history.append({
+                "question": current_question,
+                "user_answer": user_answer,
+                "evaluation": evaluation,
+            })
+            
+            st.session_state.current_evaluation = evaluation
+            st.session_state.review_state = "evaluating"
+            st.session_state.auto_submitted = False
+            st.session_state.transcribed_answer = ""
+            st.session_state.last_audio_key = None
+            st.rerun()
+    
+    # Submit button (only show if not auto-submitting)
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        submit = st.button("Submit Answer", type="primary", use_container_width=True, disabled=not user_answer)
+    with col2:
+        skip = st.button("Skip", use_container_width=True)
     
     if skip:
         # Move to next card
@@ -706,9 +742,55 @@ if st.session_state.review_state == "evaluating":
         play_audio(feedback)
         st.session_state.played_feedback = True
     
-    # Show original answer for reference (with images)
-    with st.expander("📖 Expected Answer"):
-        st.markdown(st.session_state.original_answer, unsafe_allow_html=True)
+    # Show original answer for reference (editable)
+    with st.expander("📖 Expected Answer", expanded=False):
+        # Initialize edit state
+        if "editing_answer" not in st.session_state:
+            st.session_state.editing_answer = False
+        
+        card = st.session_state.current_cards[st.session_state.current_card_index]
+        card_id = card.get("id")
+        
+        if st.session_state.editing_answer:
+            edited_answer = st.text_area(
+                "Edit the expected answer",
+                value=st.session_state.original_answer,
+                height=200,
+                key="edit_answer_textarea",
+                label_visibility="collapsed",
+            )
+            
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button("💾 Save to Mochi", type="primary", use_container_width=True):
+                    with st.spinner("Updating card..."):
+                        try:
+                            # Rebuild card content with edited answer
+                            new_content = f"{st.session_state.original_question}\n\n---\n\n{edited_answer}"
+                            # Preserve source URL if present
+                            if st.session_state.source_url:
+                                new_content += f"\n\nSource: {st.session_state.source_url}"
+                            
+                            run_async(mochi.update_card_content(
+                                st.session_state.mochi_key,
+                                card_id,
+                                new_content,
+                            ))
+                            st.session_state.original_answer = edited_answer
+                            st.session_state.editing_answer = False
+                            st.toast("✅ Card updated!", icon="✅")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error updating card: {e}")
+            with col_cancel:
+                if st.button("❌ Cancel", use_container_width=True):
+                    st.session_state.editing_answer = False
+                    st.rerun()
+        else:
+            st.markdown(st.session_state.original_answer, unsafe_allow_html=True)
+            if st.button("✏️ Edit Answer", use_container_width=True):
+                st.session_state.editing_answer = True
+                st.rerun()
     
     # Show conversation history
     if len(st.session_state.conversation_history) > 1:
@@ -1101,99 +1183,6 @@ if st.session_state.review_state == "evaluating":
                 if st.button("❌ Cancel", key="cancel_new", use_container_width=True):
                     st.session_state.pending_new_card = None
                     st.rerun()
-    
-    # Expand concepts section
-    with st.expander("🔬 Expand on concepts", expanded=False):
-        st.caption("Generate new cards that dive deeper into concepts from this card")
-        
-        concept_input = st.text_input(
-            "Specific concept to expand (optional)",
-            placeholder="Leave empty to auto-select key concepts",
-            key="concept_to_expand",
-        )
-        
-        num_expansion = st.slider("Number of cards to generate", 1, 5, 3)
-        
-        if st.button("Generate Expansion Cards", type="secondary", use_container_width=True):
-            with st.spinner("Generating expansion cards..."):
-                try:
-                    ai_key, ai_provider = get_ai_config()
-                    expansion_cards = ai.generate_expansion_cards(
-                        ai_key,
-                        st.session_state.original_question,
-                        st.session_state.original_answer,
-                        concept_to_expand=concept_input,
-                        num_cards=num_expansion,
-                        provider=ai_provider,
-                    )
-                    
-                    if expansion_cards:
-                        st.session_state.pending_expansions = expansion_cards
-                        st.success(f"Generated {len(expansion_cards)} expansion cards!")
-                        st.rerun()
-                    else:
-                        st.warning("No expansion cards generated")
-                except Exception as e:
-                    st.error(f"Error generating cards: {e}")
-        
-        # Show pending expansion cards for review
-        if "pending_expansions" in st.session_state and st.session_state.pending_expansions:
-            st.subheader("Preview Expansion Cards")
-            
-            cards_to_save = []
-            for i, exp_card in enumerate(st.session_state.pending_expansions):
-                with st.container(border=True):
-                    st.markdown(f"**Card {i+1}:** {exp_card.get('concept', 'Expansion')}")
-                    st.markdown(f"**Q:** {exp_card['question']}")
-                    st.markdown(f"**A:** {exp_card['answer']}")
-                    if st.checkbox(f"Include card {i+1}", value=True, key=f"include_exp_{i}"):
-                        cards_to_save.append(exp_card)
-            
-            if st.button("Save Selected Expansion Cards", type="primary", use_container_width=True):
-                with st.spinner("Saving expansion cards..."):
-                    try:
-                        card = st.session_state.current_cards[st.session_state.current_card_index]
-                        deck_id = card.get("deck-id")
-                        card_id = card.get("id", "unknown")
-                        
-                        # Create each expansion card in the same deck
-                        created_ids = []
-                        for exp_card in cards_to_save:
-                            card_content = ai.build_expansion_card_content(
-                                exp_card["question"],
-                                exp_card["answer"],
-                                card_id,
-                                exp_card.get("concept", ""),
-                            )
-                            
-                            new_card = run_async(mochi.create_card(
-                                st.session_state.mochi_key,
-                                deck_id,
-                                card_content,
-                                tags=["expansion"],
-                            ))
-                            created_ids.append(new_card.get("id", "unknown"))
-                        
-                        # Update original card to link to expansions
-                        original_content = card.get("content", "")
-                        links_section = "\n\n<details>\n<summary>🔗 Expansion cards</summary>\n\n"
-                        for exp_id in created_ids:
-                            links_section += f"- `{exp_id}`\n"
-                        links_section += "</details>"
-                        
-                        # Only add if not already there
-                        if "🔗 Expansion cards" not in original_content:
-                            run_async(mochi.update_card_content(
-                                st.session_state.mochi_key,
-                                card_id,
-                                original_content + links_section,
-                            ))
-                        
-                        st.success(f"Saved {len(cards_to_save)} expansion cards!")
-                        st.session_state.pending_expansions = []
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error saving cards: {e}")
 
 
 # ============ Session Complete ============
