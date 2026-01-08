@@ -389,14 +389,14 @@ def transcribe_audio(api_key: str, audio_bytes: bytes, filename: str = "audio.wa
     return response.strip()
 
 
-def text_to_speech(api_key: str, text: str, voice: str = "coral") -> bytes:
+def text_to_speech(api_key: str, text: str, voice: str = "nova") -> bytes:
     """
     Convert text to speech using OpenAI's TTS.
     
     Args:
         api_key: OpenAI API key
         text: Text to speak
-        voice: Voice to use (alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer)
+        voice: Voice to use (alloy, echo, fable, nova, onyx, shimmer)
         
     Returns:
         Audio bytes (MP3 format)
@@ -404,10 +404,9 @@ def text_to_speech(api_key: str, text: str, voice: str = "coral") -> bytes:
     client = get_client(api_key)
     
     response = client.audio.speech.create(
-        model="gpt-4o-mini-tts",
+        model="tts-1",
         voice=voice,
         input=text,
-        instructions="Speak clearly and at a moderate pace, like a friendly tutor.",
         response_format="mp3",
     )
     

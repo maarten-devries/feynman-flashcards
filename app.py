@@ -113,8 +113,6 @@ if "current_evaluation" not in st.session_state:
     st.session_state.current_evaluation = None
 if "follow_up_count" not in st.session_state:
     st.session_state.follow_up_count = 0
-if "voice_mode" not in st.session_state:
-    st.session_state.voice_mode = False
 if "selected_deck_id" not in st.session_state:
     st.session_state.selected_deck_id = None
 if "auto_submitted" not in st.session_state:
@@ -319,26 +317,7 @@ with st.sidebar:
             else:
                 st.error("Claude ✗", icon="❌")
     
-    # Voice mode toggle
-    st.divider()
-    
-    # Voice features require OpenAI key (for TTS/STT APIs)
-    has_openai_key = bool(st.session_state.openai_key)
-    
-    voice_disabled = not has_openai_key
-    voice_help = "TTS for questions/feedback, speech input, auto-submit, voice commands"
-    if voice_disabled:
-        voice_help = "⚠️ Requires OpenAI API key for TTS/STT"
-    
-    st.session_state.voice_mode = st.toggle(
-        "🎙️ Voice Mode",
-        value=st.session_state.voice_mode and has_openai_key,
-        help=voice_help,
-        disabled=voice_disabled,
-    )
-    
-    if st.session_state.voice_mode:
-        st.caption("Voice commands: 'skip', 'next', 'continue'")
+
     
     # Deck selection (optional - for specific deck review)
     st.divider()
@@ -485,13 +464,15 @@ def start_new_card():
 
 
 def play_audio(text: str):
-    """Play text as speech if voice mode is enabled."""
-    if st.session_state.voice_mode:
+    """Play text as speech if OpenAI key is available."""
+    if st.session_state.openai_key and text and text.strip():
         try:
-            audio_bytes = ai.text_to_speech(st.session_state.openai_key, text)
-            st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+            audio_bytes = ai.text_to_speech(st.session_state.openai_key, text.strip())
+            if audio_bytes:
+                st.audio(audio_bytes, format="audio/mp3", autoplay=True)
         except Exception as e:
-            st.warning(f"TTS error: {e}")
+            # Silently fail for TTS - don't interrupt the user
+            pass
 
 
 if st.session_state.review_state in ["question", "answering", "follow_up"]:
@@ -513,12 +494,12 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
         follow_up = st.session_state.current_evaluation.get("follow_up", "")
         if follow_up:
             st.info(f"🤔 {follow_up}")
-            if st.session_state.voice_mode and "played_follow_up" not in st.session_state:
+            if st.session_state.openai_key and "played_follow_up" not in st.session_state:
                 play_audio(follow_up)
                 st.session_state.played_follow_up = True
     else:
         st.info(f"🎯 {st.session_state.rephrased_question}")
-        if st.session_state.voice_mode and st.session_state.review_state == "question":
+        if st.session_state.openai_key and st.session_state.review_state == "question":
             if "played_question" not in st.session_state:
                 play_audio(st.session_state.rephrased_question)
                 st.session_state.played_question = True
@@ -565,22 +546,18 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
     # Answer input
     st.subheader("Your Answer")
     
-    # Text input (show smaller in voice mode)
-    if not st.session_state.voice_mode:
-        user_answer = st.text_area(
-            "Type your answer",
-            key=f"answer_input_{st.session_state.follow_up_count}",
-            placeholder="Explain your understanding...",
-            label_visibility="collapsed",
-        )
-    else:
-        user_answer = ""
-        st.info("🎤 Voice mode: Record your answer using the microphone below")
+    # Text input always available
+    user_answer = st.text_area(
+        "Type your answer",
+        key=f"answer_input_{st.session_state.follow_up_count}",
+        placeholder="Explain your understanding...",
+        label_visibility="collapsed",
+    )
     
-    # Voice input
+    # Voice input always available
     audio_key = f"audio_input_{st.session_state.follow_up_count}"
     audio_input = st.audio_input(
-        "🎤 Speak your answer" if st.session_state.voice_mode else "Or speak your answer",
+        "🎤 Or speak your answer",
         key=audio_key,
     )
     
@@ -722,7 +699,7 @@ if st.session_state.review_state == "evaluating":
     feedback = eval_result.get("feedback", "")
     st.write(feedback)
     
-    if st.session_state.voice_mode and "played_feedback" not in st.session_state:
+    if st.session_state.openai_key and "played_feedback" not in st.session_state:
         play_audio(feedback)
         st.session_state.played_feedback = True
     
@@ -744,13 +721,13 @@ if st.session_state.review_state == "evaluating":
     is_correct = eval_result.get("is_correct", False)
     max_follow_ups = 3
     
-    # Voice mode: voice input for navigation
-    if st.session_state.voice_mode:
+    # Voice input for navigation (always available when OpenAI key present)
+    if st.session_state.openai_key:
         st.divider()
-        st.info("🎤 Say 'got it' (remembered), 'again' (forgot), 'skip', or 'continue' for follow-up")
+        st.caption("🎤 Voice commands: 'got it', 'again', 'skip', 'continue'")
         
         nav_audio = st.audio_input(
-            "Voice command",
+            "🎤 Or speak a command",
             key="nav_audio_eval",
         )
         
@@ -936,8 +913,29 @@ if st.session_state.review_state == "evaluating":
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
     
-    # Chat input
+    # Chat input - text and voice
     chat_input = st.chat_input("Ask a question about this topic...")
+    
+    # Voice input for chat
+    chat_audio_key = f"chat_audio_{st.session_state.current_card_index}_{len(st.session_state.chat_messages)}"
+    chat_audio = st.audio_input("🎤 Or ask with voice", key=chat_audio_key)
+    
+    # Transcribe voice chat input if provided
+    if chat_audio and st.session_state.openai_key:
+        if f"transcribed_{chat_audio_key}" not in st.session_state:
+            with st.spinner("Transcribing..."):
+                try:
+                    transcribed_chat = ai.transcribe_audio(
+                        st.session_state.openai_key,
+                        chat_audio.getvalue(),
+                        "audio.wav",
+                    )
+                    st.session_state[f"transcribed_{chat_audio_key}"] = transcribed_chat
+                    chat_input = transcribed_chat
+                except Exception as e:
+                    st.error(f"Transcription error: {e}")
+        else:
+            chat_input = st.session_state[f"transcribed_{chat_audio_key}"]
     
     if chat_input:
         # Add user message
