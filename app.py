@@ -109,8 +109,6 @@ if "follow_up_count" not in st.session_state:
     st.session_state.follow_up_count = 0
 if "voice_mode" not in st.session_state:
     st.session_state.voice_mode = False
-if "hands_free_mode" not in st.session_state:
-    st.session_state.hands_free_mode = False
 if "selected_deck_id" not in st.session_state:
     st.session_state.selected_deck_id = None
 if "auto_submitted" not in st.session_state:
@@ -323,35 +321,26 @@ with st.sidebar:
             else:
                 st.error("Claude ✗", icon="❌")
     
-    # Voice mode toggles
+    # Voice mode toggle
     st.divider()
     
     # Voice features require OpenAI key (for TTS/STT APIs)
     has_openai_key = bool(st.session_state.openai_key)
     
     voice_disabled = not has_openai_key
-    voice_help = "Enable text-to-speech for questions and feedback"
+    voice_help = "TTS for questions/feedback, speech input, auto-submit, voice commands"
     if voice_disabled:
         voice_help = "⚠️ Requires OpenAI API key for TTS/STT"
     
     st.session_state.voice_mode = st.toggle(
-        "🔊 Voice Mode",
+        "🎙️ Voice Mode",
         value=st.session_state.voice_mode and has_openai_key,
         help=voice_help,
         disabled=voice_disabled,
     )
     
-    st.session_state.hands_free_mode = st.toggle(
-        "🙌 Hands-Free Mode",
-        value=st.session_state.hands_free_mode and has_openai_key,
-        help="Auto-submit after recording, voice commands (say 'skip' or 'next'), auto-advance",
-        disabled=voice_disabled,
-    )
-    
-    if st.session_state.hands_free_mode:
+    if st.session_state.voice_mode:
         st.caption("Voice commands: 'skip', 'next', 'continue'")
-        # Enable voice mode automatically in hands-free
-        st.session_state.voice_mode = True
     
     # Links
     st.divider()
@@ -588,8 +577,8 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
     # Answer input
     st.subheader("Your Answer")
     
-    # Text input (hide in hands-free mode)
-    if not st.session_state.hands_free_mode:
+    # Text input (show smaller in voice mode)
+    if not st.session_state.voice_mode:
         user_answer = st.text_area(
             "Type your answer",
             key=f"answer_input_{st.session_state.follow_up_count}",
@@ -598,12 +587,12 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
         )
     else:
         user_answer = ""
-        st.info("🎤 Hands-free mode: Record your answer using the microphone below")
+        st.info("🎤 Voice mode: Record your answer using the microphone below")
     
     # Voice input
     audio_key = f"audio_input_{st.session_state.follow_up_count}"
     audio_input = st.audio_input(
-        "🎤 Speak your answer" if st.session_state.hands_free_mode else "Or speak your answer",
+        "🎤 Speak your answer" if st.session_state.voice_mode else "Or speak your answer",
         key=audio_key,
     )
     
@@ -659,7 +648,7 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
         st.rerun()
     
     # Auto-submit in hands-free mode when audio is recorded
-    if st.session_state.hands_free_mode and audio_input and user_answer and not voice_command_detected and not st.session_state.auto_submitted:
+    if st.session_state.voice_mode and audio_input and user_answer and not voice_command_detected and not st.session_state.auto_submitted:
         submit = True
         st.session_state.auto_submitted = True
     
@@ -764,8 +753,8 @@ if st.session_state.review_state == "evaluating":
     is_correct = eval_result.get("is_correct", False)
     max_follow_ups = 3
     
-    # Hands-free mode: voice input for navigation
-    if st.session_state.hands_free_mode:
+    # Voice mode: voice input for navigation
+    if st.session_state.voice_mode:
         st.divider()
         st.info("🎤 Say 'got it' (remembered), 'again' (forgot), 'skip', or 'continue' for follow-up")
         
