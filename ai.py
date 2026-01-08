@@ -10,6 +10,8 @@ Supports both OpenAI and Anthropic (Claude) APIs.
 """
 
 import json
+import re
+import httpx
 from openai import OpenAI
 import anthropic
 from typing import Optional, Union
@@ -76,16 +78,32 @@ async def validate_api_key(api_key: str) -> tuple[bool, str]:
     return await validate_openai_key(api_key)
 
 
-def parse_card_content(content: str) -> tuple[str, str]:
+def parse_card_content(content: str) -> tuple[str, str, Optional[str]]:
     """
-    Parse Mochi card content into question and answer.
+    Parse Mochi card content into question, answer, and source.
     
     Mochi cards typically use --- to separate front/back,
     or use template fields like << Front >> and << Back >>.
+    Source field can be specified as "Source: <url>" or in a template field.
     
     Returns:
-        (question, answer) tuple
+        (question, answer, source_url) tuple
     """
+    source_url = None
+    
+    # Extract Source field if present (various formats)
+    # Format 1: "Source: <url>" on its own line
+    source_match = re.search(r'^Source:\s*(https?://\S+)', content, re.MULTILINE | re.IGNORECASE)
+    if source_match:
+        source_url = source_match.group(1).strip()
+        # Remove the source line from content for cleaner parsing
+        content = re.sub(r'^Source:\s*https?://\S+\s*\n?', '', content, flags=re.MULTILINE | re.IGNORECASE)
+    
+    # Format 2: Template field << Source >>
+    template_source_match = re.search(r'<<\s*Source\s*>>\s*\n?(https?://\S+)', content, re.IGNORECASE)
+    if template_source_match and not source_url:
+        source_url = template_source_match.group(1).strip()
+    
     # Handle --- separator (most common)
     if "---" in content:
         parts = content.split("---", 1)
@@ -93,18 +111,69 @@ def parse_card_content(content: str) -> tuple[str, str]:
         answer = parts[1].strip() if len(parts) > 1 else ""
         # Clean up markdown headers
         question = question.lstrip("#").strip()
-        return question, answer
+        return question, answer, source_url
     
     # Handle << Field >> template syntax
     if "<<" in content and ">>" in content:
         # This is a template card - just use the whole content
-        return content, ""
+        return content, "", source_url
     
     # Fallback: treat first line as question, rest as answer
     lines = content.strip().split("\n", 1)
     question = lines[0].lstrip("#").strip()
     answer = lines[1].strip() if len(lines) > 1 else ""
-    return question, answer
+    return question, answer, source_url
+
+
+async def fetch_source_content(url: str, max_length: int = 15000) -> Optional[str]:
+    """
+    Fetch and extract main content from a source URL.
+    
+    Args:
+        url: The URL to fetch
+        max_length: Maximum characters to return (to fit in context)
+        
+    Returns:
+        Extracted text content or None if fetch fails
+    """
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            response = await client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                }
+            )
+            response.raise_for_status()
+            html = response.text
+            
+            # Simple extraction: remove scripts, styles, and HTML tags
+            # Remove script and style elements
+            html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<nav[^>]*>.*?</nav>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<header[^>]*>.*?</header>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<footer[^>]*>.*?</footer>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            
+            # Remove HTML tags
+            text = re.sub(r'<[^>]+>', ' ', html)
+            
+            # Clean up whitespace
+            text = re.sub(r'\s+', ' ', text).strip()
+            
+            # Decode HTML entities
+            import html as html_module
+            text = html_module.unescape(text)
+            
+            # Truncate if too long
+            if len(text) > max_length:
+                text = text[:max_length] + "... [truncated]"
+            
+            return text if text else None
+            
+    except Exception as e:
+        print(f"Error fetching source: {e}")
+        return None
 
 
 def rephrase_question(
@@ -183,6 +252,7 @@ def evaluate_answer(
     user_answer: str,
     conversation_history: Optional[list[dict]] = None,
     provider: str = "openai",
+    source_content: Optional[str] = None,
 ) -> dict:
     """
     Evaluate a user's answer and provide Socratic feedback.
@@ -194,6 +264,7 @@ def evaluate_answer(
         user_answer: What the user provided
         conversation_history: Previous exchanges for follow-up context
         provider: "openai" or "anthropic"
+        source_content: Optional content from the source URL for additional context
         
     Returns:
         Dict with:
@@ -202,23 +273,34 @@ def evaluate_answer(
         - feedback: str - explanation of what's right/wrong
         - follow_up: str|None - follow-up question if needed
     """
-    system_prompt = """You are a Socratic tutor evaluating student understanding.
+    source_context = ""
+    if source_content:
+        source_context = f"""
+
+You also have access to the original source material this flashcard was created from.
+Use this to provide deeper, more informed feedback and ask more insightful follow-up questions.
+
+SOURCE CONTENT:
+{source_content[:10000]}
+"""
+    
+    system_prompt = f"""You are a Socratic tutor evaluating student understanding.
 
 Your role is to:
 1. Assess if the student's answer demonstrates understanding of the core concept
 2. Provide constructive feedback
 3. If understanding is incomplete, ask a follow-up question to probe deeper
-
+{source_context}
 Be encouraging but honest. Focus on conceptual understanding, not exact wording.
 A partially correct answer should get a follow-up question to clarify gaps.
 
 Respond in JSON format:
-{
+{{
     "is_correct": true/false,
     "score": 0.0-1.0,
     "feedback": "Your explanation of what's right/wrong",
     "follow_up": "A follow-up question if needed, or null if understanding is complete"
-}"""
+}}"""
 
     # Build conversation history context
     history_text = ""
@@ -328,6 +410,7 @@ def chat_followup(
     original_answer: str,
     user_message: str,
     provider: str = "openai",
+    source_content: Optional[str] = None,
 ) -> str:
     """
     Continue a conversation about the flashcard topic.
@@ -339,16 +422,29 @@ def chat_followup(
         original_answer: The card's answer
         user_message: The user's follow-up question
         provider: "openai" or "anthropic"
+        source_content: Optional content from the source URL for additional context
         
     Returns:
         AI response as string
     """
+    source_context = ""
+    if source_content:
+        source_context = f"""
+
+You also have access to the original source material this flashcard was created from:
+
+SOURCE CONTENT:
+{source_content[:10000]}
+
+Use this source to provide more detailed, accurate answers and to point out additional
+relevant information from the original material that the user might find helpful."""
+    
     system_prompt = f"""You are a Socratic tutor helping someone deeply understand a topic.
 
 Context - The flashcard being studied:
 Question: {original_question}
 Answer: {original_answer}
-
+{source_context}
 Help the user understand this topic better. Answer their questions, provide clarifications, 
 give examples, and help them build intuition. Be concise but thorough.
 

@@ -119,6 +119,14 @@ if "transcribed_answer" not in st.session_state:
     st.session_state.transcribed_answer = ""
 if "last_audio_key" not in st.session_state:
     st.session_state.last_audio_key = None
+if "source_url" not in st.session_state:
+    st.session_state.source_url = None
+if "source_content" not in st.session_state:
+    st.session_state.source_content = None
+if "use_source" not in st.session_state:
+    st.session_state.use_source = False
+if "source_cache" not in st.session_state:
+    st.session_state.source_cache = {}  # URL -> content cache
 
 
 def run_async(coro):
@@ -472,11 +480,14 @@ def start_new_card():
             mochi.resolve_card_images(st.session_state.mochi_key, card_id, content)
         )
     
-    # Parse question and answer
-    question, answer = ai.parse_card_content(resolved_content)
+    # Parse question, answer, and source
+    question, answer, source_url = ai.parse_card_content(resolved_content)
     st.session_state.original_question = question
     st.session_state.original_answer = answer
     st.session_state.resolved_content = resolved_content  # Store for display
+    st.session_state.source_url = source_url
+    st.session_state.source_content = None
+    st.session_state.use_source = False
     
     # Generate rephrased question
     with st.spinner("Rephrasing question..."):
@@ -538,6 +549,36 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
     # Show original question (front of card only, with images)
     with st.expander("📄 Show Original Question", expanded=False):
         st.markdown(st.session_state.original_question, unsafe_allow_html=True)
+    
+    # Source toggle - only show if card has a source URL
+    if st.session_state.source_url:
+        col_source, col_status = st.columns([3, 1])
+        with col_source:
+            use_source = st.toggle(
+                "📚 Use Source Context",
+                value=st.session_state.use_source,
+                help=f"Include content from source in AI conversation: {st.session_state.source_url}",
+            )
+            if use_source != st.session_state.use_source:
+                st.session_state.use_source = use_source
+                # Fetch source content if toggled on and not cached
+                if use_source and not st.session_state.source_content:
+                    url = st.session_state.source_url
+                    if url in st.session_state.source_cache:
+                        st.session_state.source_content = st.session_state.source_cache[url]
+                    else:
+                        with st.spinner("Fetching source content..."):
+                            content = run_async(ai.fetch_source_content(url))
+                            if content:
+                                st.session_state.source_content = content
+                                st.session_state.source_cache[url] = content
+                st.rerun()
+        with col_status:
+            if st.session_state.use_source:
+                if st.session_state.source_content:
+                    st.success("✓ Loaded", icon="📚")
+                else:
+                    st.warning("✗ Failed", icon="⚠️")
     
     # Show previous feedback if in follow-up
     if st.session_state.current_evaluation and st.session_state.review_state == "follow_up":
@@ -649,6 +690,12 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
                 current_question = st.session_state.rephrased_question
             
             ai_key, ai_provider = get_ai_config()
+            
+            # Include source content if enabled
+            source_content = None
+            if st.session_state.use_source and st.session_state.source_content:
+                source_content = st.session_state.source_content
+            
             evaluation = ai.evaluate_answer(
                 ai_key,
                 current_question,
@@ -656,6 +703,7 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
                 user_answer,
                 st.session_state.conversation_history if st.session_state.conversation_history else None,
                 provider=ai_provider,
+                source_content=source_content,
             )
             
             # Store in history
@@ -919,6 +967,12 @@ if st.session_state.review_state == "evaluating":
         with st.spinner("Thinking..."):
             try:
                 ai_key, ai_provider = get_ai_config()
+                
+                # Include source content if enabled
+                source_content = None
+                if st.session_state.use_source and st.session_state.source_content:
+                    source_content = st.session_state.source_content
+                
                 response = ai.chat_followup(
                     ai_key,
                     st.session_state.chat_messages,
@@ -926,6 +980,7 @@ if st.session_state.review_state == "evaluating":
                     st.session_state.original_answer,
                     chat_input,
                     provider=ai_provider,
+                    source_content=source_content,
                 )
                 st.session_state.chat_messages.append({"role": "assistant", "content": response})
                 st.rerun()
