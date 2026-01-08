@@ -527,19 +527,25 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
                     url = st.session_state.source_url
                     if url in st.session_state.source_cache:
                         st.session_state.source_content = st.session_state.source_cache[url]
+                        st.session_state.source_status = st.session_state.source_cache.get(f"{url}_status", "Loaded")
                     else:
                         with st.spinner("Fetching source content..."):
-                            content = run_async(ai.fetch_source_content(url))
+                            content, status = run_async(ai.fetch_source_content(url))
+                            st.session_state.source_status = status
                             if content:
                                 st.session_state.source_content = content
                                 st.session_state.source_cache[url] = content
+                                st.session_state.source_cache[f"{url}_status"] = status
+                            else:
+                                st.session_state.source_content = None
                 st.rerun()
         with col_status:
             if st.session_state.use_source:
+                status_msg = getattr(st.session_state, 'source_status', '')
                 if st.session_state.source_content:
-                    st.success("✓ Loaded", icon="📚")
+                    st.success(f"✓ {status_msg}", icon="📚")
                 else:
-                    st.warning("✗ Failed", icon="⚠️")
+                    st.warning(f"✗ {status_msg}", icon="⚠️")
     
     # Show previous feedback if in follow-up
     if st.session_state.current_evaluation and st.session_state.review_state == "follow_up":
@@ -983,206 +989,6 @@ if st.session_state.review_state == "evaluating":
         if st.button("⏭️ Skip", use_container_width=True, help="Skip without marking in Mochi"):
             move_to_next()
             st.rerun()
-    
-    # ============ Chat Interface ============
-    st.divider()
-    st.subheader("💬 Chat & Explore")
-    st.caption("Ask follow-up questions, clarify concepts, or discuss modifications")
-    
-    # Initialize chat messages in session state
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-    
-    # Display chat history
-    for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-    
-    # Chat input - text and voice
-    chat_input = st.chat_input("Ask a question about this topic...")
-    
-    # Voice input for chat
-    chat_audio_key = f"chat_audio_{st.session_state.current_card_index}_{len(st.session_state.chat_messages)}"
-    chat_audio = st.audio_input("🎤 Or ask with voice", key=chat_audio_key)
-    
-    # Transcribe voice chat input if provided
-    if chat_audio and st.session_state.openai_key:
-        if f"transcribed_{chat_audio_key}" not in st.session_state:
-            with st.spinner("Transcribing..."):
-                try:
-                    transcribed_chat = ai.transcribe_audio(
-                        st.session_state.openai_key,
-                        chat_audio.getvalue(),
-                        "audio.wav",
-                    )
-                    st.session_state[f"transcribed_{chat_audio_key}"] = transcribed_chat
-                    chat_input = transcribed_chat
-                except Exception as e:
-                    st.error(f"Transcription error: {e}")
-        else:
-            chat_input = st.session_state[f"transcribed_{chat_audio_key}"]
-    
-    if chat_input:
-        # Add user message
-        st.session_state.chat_messages.append({"role": "user", "content": chat_input})
-        
-        # Get AI response
-        with st.spinner("Thinking..."):
-            try:
-                ai_key, ai_provider = get_ai_config()
-                
-                # Include source content if enabled
-                source_content = None
-                if st.session_state.use_source and st.session_state.source_content:
-                    source_content = st.session_state.source_content
-                
-                response = ai.chat_followup(
-                    ai_key,
-                    st.session_state.chat_messages,
-                    st.session_state.original_question,
-                    st.session_state.original_answer,
-                    chat_input,
-                    provider=ai_provider,
-                    source_content=source_content,
-                )
-                st.session_state.chat_messages.append({"role": "assistant", "content": response})
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
-    
-    # ============ Card Actions ============
-    st.divider()
-    with st.expander("✏️ Modify or Add Cards", expanded=False):
-        st.caption("Update this card or create a new one based on your learning")
-        
-        card = st.session_state.current_cards[st.session_state.current_card_index]
-        deck_id = card.get("deck-id")
-        card_id = card.get("id", "unknown")
-        
-        col_mod, col_add = st.columns(2)
-        
-        with col_mod:
-            if st.button("📝 Suggest Modification", use_container_width=True):
-                with st.spinner("Analyzing conversation..."):
-                    try:
-                        ai_key, ai_provider = get_ai_config()
-                        suggestion = ai.suggest_card_modification(
-                            ai_key,
-                            st.session_state.original_question,
-                            st.session_state.original_answer,
-                            st.session_state.chat_messages,
-                            provider=ai_provider,
-                        )
-                        st.session_state.pending_modification = suggestion
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-        
-        with col_add:
-            if st.button("➕ Suggest New Card", use_container_width=True):
-                with st.spinner("Creating new card suggestion..."):
-                    try:
-                        ai_key, ai_provider = get_ai_config()
-                        suggestion = ai.suggest_new_card(
-                            ai_key,
-                            st.session_state.original_question,
-                            st.session_state.original_answer,
-                            st.session_state.chat_messages,
-                            provider=ai_provider,
-                        )
-                        st.session_state.pending_new_card = suggestion
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-        
-        # Show modification suggestion
-        if "pending_modification" in st.session_state and st.session_state.pending_modification:
-            st.subheader("Suggested Modification")
-            mod = st.session_state.pending_modification
-            
-            st.markdown("**Question:**")
-            mod_question = st.text_area(
-                "Edit question",
-                value=mod.get("question", st.session_state.original_question),
-                key="mod_question",
-                label_visibility="collapsed",
-            )
-            
-            st.markdown("**Answer:**")
-            mod_answer = st.text_area(
-                "Edit answer",
-                value=mod.get("answer", st.session_state.original_answer),
-                key="mod_answer",
-                label_visibility="collapsed",
-            )
-            
-            col_save_mod, col_cancel_mod = st.columns(2)
-            with col_save_mod:
-                if st.button("💾 Save Changes to Card", type="primary", use_container_width=True):
-                    with st.spinner("Updating card..."):
-                        try:
-                            new_content = f"{mod_question}\n\n---\n\n{mod_answer}"
-                            run_async(mochi.update_card_content(
-                                st.session_state.mochi_key,
-                                card_id,
-                                new_content,
-                            ))
-                            st.success("Card updated!")
-                            st.session_state.pending_modification = None
-                            # Update local copy
-                            st.session_state.original_question = mod_question
-                            st.session_state.original_answer = mod_answer
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error updating card: {e}")
-            
-            with col_cancel_mod:
-                if st.button("❌ Cancel", key="cancel_mod", use_container_width=True):
-                    st.session_state.pending_modification = None
-                    st.rerun()
-        
-        # Show new card suggestion
-        if "pending_new_card" in st.session_state and st.session_state.pending_new_card:
-            st.subheader("New Card Preview")
-            new_card = st.session_state.pending_new_card
-            
-            st.markdown("**Question:**")
-            new_question = st.text_area(
-                "Edit question",
-                value=new_card.get("question", ""),
-                key="new_question",
-                label_visibility="collapsed",
-            )
-            
-            st.markdown("**Answer:**")
-            new_answer = st.text_area(
-                "Edit answer",
-                value=new_card.get("answer", ""),
-                key="new_answer",
-                label_visibility="collapsed",
-            )
-            
-            col_save_new, col_cancel_new = st.columns(2)
-            with col_save_new:
-                if st.button("💾 Add Card to Deck", type="primary", use_container_width=True):
-                    with st.spinner("Creating card..."):
-                        try:
-                            card_content = f"{new_question}\n\n---\n\n{new_answer}"
-                            run_async(mochi.create_card(
-                                st.session_state.mochi_key,
-                                deck_id,
-                                card_content,
-                            ))
-                            st.success("New card created!")
-                            st.session_state.pending_new_card = None
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error creating card: {e}")
-            
-            with col_cancel_new:
-                if st.button("❌ Cancel", key="cancel_new", use_container_width=True):
-                    st.session_state.pending_new_card = None
-                    st.rerun()
 
 
 # ============ Session Complete ============

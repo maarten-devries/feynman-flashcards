@@ -136,7 +136,7 @@ def parse_card_content(content: str) -> tuple[str, str, Optional[str]]:
     return question, answer, source_url
 
 
-async def fetch_source_content(url: str, max_length: int = 15000) -> Optional[str]:
+async def fetch_source_content(url: str, max_length: int = 15000) -> tuple[Optional[str], str]:
     """
     Fetch and extract main content from a source URL.
     
@@ -145,7 +145,7 @@ async def fetch_source_content(url: str, max_length: int = 15000) -> Optional[st
         max_length: Maximum characters to return (to fit in context)
         
     Returns:
-        Extracted text content or None if fetch fails
+        Tuple of (extracted text content or None, status message)
     """
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
@@ -176,15 +176,49 @@ async def fetch_source_content(url: str, max_length: int = 15000) -> Optional[st
             import html as html_module
             text = html_module.unescape(text)
             
+            # Check for paywall/login indicators
+            paywall_indicators = [
+                "sign in to continue",
+                "subscribe to read",
+                "subscription required",
+                "create an account",
+                "login to access",
+                "access denied",
+                "institutional access",
+                "purchase this article",
+                "buy this article",
+                "rent this article",
+                "full text not available",
+                "access to this content is restricted",
+                "you need a subscription",
+                "members only",
+            ]
+            
+            text_lower = text.lower()
+            for indicator in paywall_indicators:
+                if indicator in text_lower:
+                    return None, f"Paywall detected"
+            
+            # Check if content is too short (likely just a teaser/abstract)
+            if len(text) < 500:
+                return None, "Content too short (likely abstract only)"
+            
             # Truncate if too long
             if len(text) > max_length:
                 text = text[:max_length] + "... [truncated]"
             
-            return text if text else None
+            # Estimate word count for user feedback
+            word_count = len(text.split())
+            return text, f"Loaded ~{word_count} words"
             
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 403:
+            return None, "Access forbidden (403)"
+        elif e.response.status_code == 401:
+            return None, "Authentication required"
+        return None, f"HTTP error {e.response.status_code}"
     except Exception as e:
-        print(f"Error fetching source: {e}")
-        return None
+        return None, f"Failed to fetch"
 
 
 def rephrase_question(
