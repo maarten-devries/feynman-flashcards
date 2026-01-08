@@ -18,6 +18,9 @@ import ai
 # Load environment variables from .env file
 load_dotenv()
 
+# Text-to-speech is disabled by default (set TEXT_TO_SPEECH=true to enable)
+_tts_enabled = os.getenv("TEXT_TO_SPEECH", "false").lower() in ("true", "1", "yes")
+
 # Determine if we should collapse sidebar (auto-connect with cached keys)
 _has_mochi_key = bool(os.getenv("MOCHI_API_KEY"))
 _has_ai_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
@@ -464,8 +467,8 @@ def start_new_card():
 
 
 def play_audio(text: str):
-    """Play text as speech if OpenAI key is available."""
-    if st.session_state.openai_key and text and text.strip():
+    """Play text as speech if TTS is enabled and OpenAI key is available."""
+    if _tts_enabled and st.session_state.openai_key and text and text.strip():
         try:
             audio_bytes = ai.text_to_speech(st.session_state.openai_key, text.strip())
             if audio_bytes:
