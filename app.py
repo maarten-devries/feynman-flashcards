@@ -148,31 +148,23 @@ def run_async(coro):
 if not st.session_state.auto_connected:
     st.session_state.auto_connected = True
     
-    # Check if we have keys to auto-validate
+    # Assume keys work and mark as valid (skip validation calls)
     mochi_key = st.session_state.mochi_key
     openai_key = st.session_state.openai_key
     anthropic_key = st.session_state.anthropic_key
     ai_provider = st.session_state.ai_provider
     
     if mochi_key:
-        # Validate Mochi
-        mochi_ok, _ = run_async(mochi.validate_api_key(mochi_key))
-        st.session_state.mochi_valid = mochi_ok
-        if mochi_ok:
-            st.session_state.decks = run_async(mochi.get_decks(mochi_key))
-            st.session_state.deck_tree = mochi.build_deck_tree(st.session_state.decks)
+        st.session_state.mochi_valid = True
+        st.session_state.decks = run_async(mochi.get_decks(mochi_key))
+        st.session_state.deck_tree = mochi.build_deck_tree(st.session_state.decks)
     
-    # Validate AI provider
     if ai_provider == "openai" and openai_key:
-        openai_ok, _ = run_async(ai.validate_openai_key(openai_key))
-        st.session_state.openai_valid = openai_ok
+        st.session_state.openai_valid = True
     elif ai_provider == "anthropic" and anthropic_key:
-        anthropic_ok, _ = run_async(ai.validate_anthropic_key(anthropic_key))
-        st.session_state.anthropic_valid = anthropic_ok
-        # Also validate OpenAI if available (for voice)
+        st.session_state.anthropic_valid = True
         if openai_key:
-            openai_ok, _ = run_async(ai.validate_openai_key(openai_key))
-            st.session_state.openai_valid = openai_ok
+            st.session_state.openai_valid = True
 
 
 # ============ Sidebar: API Keys & Settings ============
