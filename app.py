@@ -18,11 +18,17 @@ import ai
 # Load environment variables from .env file
 load_dotenv()
 
+# Determine if we should collapse sidebar (auto-connect with cached keys)
+_has_mochi_key = bool(os.getenv("MOCHI_API_KEY"))
+_has_ai_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
+_should_collapse_sidebar = _has_mochi_key and _has_ai_key
+
 # Page config
 st.set_page_config(
     page_title="Feynman Flashcards",
     page_icon="🧠",
     layout="centered",
+    initial_sidebar_state="collapsed" if _should_collapse_sidebar else "expanded",
 )
 
 
@@ -352,18 +358,8 @@ with st.sidebar:
 
 # ============ Main Content ============
 
-st.title("🧠 Feynman Flashcards")
-st.caption("Deep practice through AI-rephrased questions and Socratic dialogue")
-
 # Inject keyboard shortcuts
 inject_keyboard_shortcuts()
-
-# Show shortcut hints
-with st.expander("⌨️ Keyboard shortcuts", expanded=False):
-    st.markdown("""
-    - **⌘/Ctrl + Enter** — Submit answer / Save & Next card
-    - **Escape** — Skip current card
-    """)
 
 # Check if connected
 ai_valid = (
