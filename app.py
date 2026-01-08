@@ -457,8 +457,14 @@ def start_new_card():
     st.session_state.original_answer = answer
     st.session_state.resolved_content = resolved_content  # Store for display
     st.session_state.source_url = source_url
-    st.session_state.source_content = None
-    st.session_state.use_source = False
+    
+    # Auto-load source content from cache if available (no re-fetch needed)
+    if source_url and source_url in st.session_state.source_cache:
+        st.session_state.source_content = st.session_state.source_cache[source_url]
+        st.session_state.use_source = True  # Auto-enable if cached
+    else:
+        st.session_state.source_content = None
+        st.session_state.use_source = False
     
     # Generate rephrased question
     with st.spinner("Rephrasing question..."):
