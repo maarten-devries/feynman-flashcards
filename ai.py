@@ -84,7 +84,10 @@ def parse_card_content(content: str) -> tuple[str, str, Optional[str]]:
     
     Mochi cards typically use --- to separate front/back,
     or use template fields like << Front >> and << Back >>.
-    Source field can be specified as "Source: <url>" or in a template field.
+    Source field can be specified as:
+    - "Source: <url>" (plain URL)
+    - "Source: [label](url)" (markdown hyperlink)
+    - Template field << Source >>
     
     Returns:
         (question, answer, source_url) tuple
@@ -92,17 +95,25 @@ def parse_card_content(content: str) -> tuple[str, str, Optional[str]]:
     source_url = None
     
     # Extract Source field if present (various formats)
-    # Format 1: "Source: <url>" on its own line
-    source_match = re.search(r'^Source:\s*(https?://\S+)', content, re.MULTILINE | re.IGNORECASE)
-    if source_match:
-        source_url = source_match.group(1).strip()
+    # Format 1: "Source: [label](url)" markdown hyperlink
+    source_md_match = re.search(r'^Source:\s*\[[^\]]*\]\((https?://[^)]+)\)', content, re.MULTILINE | re.IGNORECASE)
+    if source_md_match:
+        source_url = source_md_match.group(1).strip()
         # Remove the source line from content for cleaner parsing
-        content = re.sub(r'^Source:\s*https?://\S+\s*\n?', '', content, flags=re.MULTILINE | re.IGNORECASE)
+        content = re.sub(r'^Source:\s*\[[^\]]*\]\(https?://[^)]+\)\s*\n?', '', content, flags=re.MULTILINE | re.IGNORECASE)
     
-    # Format 2: Template field << Source >>
-    template_source_match = re.search(r'<<\s*Source\s*>>\s*\n?(https?://\S+)', content, re.IGNORECASE)
-    if template_source_match and not source_url:
-        source_url = template_source_match.group(1).strip()
+    # Format 2: "Source: <url>" plain URL on its own line
+    if not source_url:
+        source_match = re.search(r'^Source:\s*(https?://\S+)', content, re.MULTILINE | re.IGNORECASE)
+        if source_match:
+            source_url = source_match.group(1).strip()
+            content = re.sub(r'^Source:\s*https?://\S+\s*\n?', '', content, flags=re.MULTILINE | re.IGNORECASE)
+    
+    # Format 3: Template field << Source >>
+    if not source_url:
+        template_source_match = re.search(r'<<\s*Source\s*>>\s*\n?(https?://\S+)', content, re.IGNORECASE)
+        if template_source_match:
+            source_url = template_source_match.group(1).strip()
     
     # Handle --- separator (most common)
     if "---" in content:
