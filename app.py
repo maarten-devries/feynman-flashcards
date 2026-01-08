@@ -115,6 +115,10 @@ if "selected_deck_id" not in st.session_state:
     st.session_state.selected_deck_id = None
 if "auto_submitted" not in st.session_state:
     st.session_state.auto_submitted = False
+if "transcribed_answer" not in st.session_state:
+    st.session_state.transcribed_answer = ""
+if "last_audio_key" not in st.session_state:
+    st.session_state.last_audio_key = None
 
 
 def run_async(coro):
@@ -488,6 +492,8 @@ def start_new_card():
     st.session_state.conversation_history = []
     st.session_state.current_evaluation = None
     st.session_state.follow_up_count = 0
+    st.session_state.transcribed_answer = ""
+    st.session_state.last_audio_key = None
 
 
 def play_audio(text: str):
@@ -554,14 +560,18 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
         st.info("🎤 Hands-free mode: Record your answer using the microphone below")
     
     # Voice input
+    audio_key = f"audio_input_{st.session_state.follow_up_count}"
     audio_input = st.audio_input(
         "🎤 Speak your answer" if st.session_state.hands_free_mode else "Or speak your answer",
-        key=f"audio_input_{st.session_state.follow_up_count}",
+        key=audio_key,
     )
     
     voice_command_detected = None
     
-    if audio_input and not st.session_state.auto_submitted:
+    # Only transcribe if we have new audio (different key or new recording)
+    if audio_input and st.session_state.last_audio_key != audio_key:
+        st.session_state.last_audio_key = audio_key
+        st.session_state.transcribed_answer = ""
         with st.spinner("Transcribing..."):
             try:
                 transcribed = ai.transcribe_audio(
@@ -569,7 +579,7 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
                     audio_input.getvalue(),
                     "audio.wav",
                 )
-                st.success(f"Transcribed: {transcribed}")
+                st.session_state.transcribed_answer = transcribed
                 user_answer = transcribed
                 
                 # Check for voice commands
@@ -581,6 +591,10 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
                 
             except Exception as e:
                 st.error(f"Transcription error: {e}")
+    elif audio_input and st.session_state.transcribed_answer:
+        # Use cached transcription
+        user_answer = st.session_state.transcribed_answer
+        st.success(f"Transcribed: {user_answer}")
     
     # Submit button
     col1, col2 = st.columns([3, 1])
@@ -592,6 +606,8 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
     # Handle voice command: skip
     if voice_command_detected == "skip":
         st.session_state.auto_submitted = False
+        st.session_state.transcribed_answer = ""
+        st.session_state.last_audio_key = None
         st.session_state.current_card_index += 1
         st.session_state.rephrased_question = ""
         st.session_state.review_state = "question"
@@ -609,6 +625,8 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
     if skip:
         # Move to next card
         st.session_state.auto_submitted = False
+        st.session_state.transcribed_answer = ""
+        st.session_state.last_audio_key = None
         st.session_state.current_card_index += 1
         st.session_state.rephrased_question = ""
         st.session_state.review_state = "question"
@@ -621,6 +639,8 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
     
     if submit and user_answer:
         st.session_state.auto_submitted = False
+        st.session_state.transcribed_answer = ""
+        st.session_state.last_audio_key = None
         with st.spinner("Evaluating your answer..."):
             # Determine what question we're evaluating against
             if st.session_state.review_state == "follow_up" and st.session_state.current_evaluation:
@@ -741,6 +761,8 @@ if st.session_state.review_state == "evaluating":
             st.session_state.conversation_history = []
             st.session_state.chat_messages = []
             st.session_state.follow_up_count = 0
+            st.session_state.transcribed_answer = ""
+            st.session_state.last_audio_key = None
             st.session_state.pop("played_question", None)
             st.session_state.pop("played_feedback", None)
             if st.session_state.current_card_index >= len(st.session_state.current_cards):
@@ -748,6 +770,8 @@ if st.session_state.review_state == "evaluating":
             st.rerun()
         elif action == "continue":
             st.session_state.follow_up_count += 1
+            st.session_state.transcribed_answer = ""
+            st.session_state.last_audio_key = None
             st.session_state.review_state = "follow_up"
             st.session_state.pop("played_follow_up", None)
             st.session_state.pop("played_feedback", None)
@@ -769,6 +793,8 @@ if st.session_state.review_state == "evaluating":
             st.session_state.conversation_history = []
             st.session_state.chat_messages = []
             st.session_state.follow_up_count = 0
+            st.session_state.transcribed_answer = ""
+            st.session_state.last_audio_key = None
             st.session_state.pop("played_question", None)
             st.session_state.pop("played_feedback", None)
             if st.session_state.current_card_index >= len(st.session_state.current_cards):
@@ -791,6 +817,8 @@ if st.session_state.review_state == "evaluating":
             st.session_state.conversation_history = []
             st.session_state.chat_messages = []
             st.session_state.follow_up_count = 0
+            st.session_state.transcribed_answer = ""
+            st.session_state.last_audio_key = None
             st.session_state.pop("played_question", None)
             st.session_state.pop("played_feedback", None)
             if st.session_state.current_card_index >= len(st.session_state.current_cards):
@@ -821,6 +849,8 @@ if st.session_state.review_state == "evaluating":
         st.session_state.conversation_history = []
         st.session_state.chat_messages = []
         st.session_state.follow_up_count = 0
+        st.session_state.transcribed_answer = ""
+        st.session_state.last_audio_key = None
         st.session_state.pop("played_question", None)
         st.session_state.pop("played_feedback", None)
         st.session_state.pop("pending_card_suggestion", None)
