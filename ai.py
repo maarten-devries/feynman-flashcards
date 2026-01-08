@@ -171,7 +171,7 @@ Provide ONLY the rephrased question, nothing else."""
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.8,
-            max_tokens=300,
+            max_completion_tokens=300,
         )
         return response.choices[0].message.content.strip()
 
@@ -253,7 +253,7 @@ Evaluate this answer and respond in JSON format."""
             model="gpt-5.2",
             messages=messages,
             temperature=0.3,
-            max_tokens=500,
+            max_completion_tokens=500,
             response_format={"type": "json_object"},
         )
         result = json.loads(response.choices[0].message.content)
@@ -380,7 +380,7 @@ If they want to create a new card, help them formulate a clear question and answ
             model="gpt-5.2",
             messages=messages,
             temperature=0.7,
-            max_tokens=1000,
+            max_completion_tokens=1000,
         )
         return response.choices[0].message.content
 
@@ -586,7 +586,7 @@ Generate cards that would help someone deeply understand this material."""
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.7,
-            max_tokens=1500,
+            max_completion_tokens=1500,
             response_format={"type": "json_object"},
         )
         result = json.loads(response.choices[0].message.content)

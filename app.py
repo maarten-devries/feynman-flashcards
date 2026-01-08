@@ -70,13 +70,19 @@ if "openai_key" not in st.session_state:
 if "anthropic_key" not in st.session_state:
     st.session_state.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
 if "ai_provider" not in st.session_state:
-    st.session_state.ai_provider = "openai"
+    # Default to anthropic if we have that key, otherwise openai
+    if os.getenv("ANTHROPIC_API_KEY"):
+        st.session_state.ai_provider = "anthropic"
+    else:
+        st.session_state.ai_provider = "openai"
 if "mochi_valid" not in st.session_state:
     st.session_state.mochi_valid = False
 if "openai_valid" not in st.session_state:
     st.session_state.openai_valid = False
 if "anthropic_valid" not in st.session_state:
     st.session_state.anthropic_valid = False
+if "auto_connected" not in st.session_state:
+    st.session_state.auto_connected = False
 if "decks" not in st.session_state:
     st.session_state.decks = []
 if "deck_tree" not in st.session_state:
@@ -119,6 +125,38 @@ def run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
+
+
+# ============ Auto-connect on startup if keys are in .env ============
+
+if not st.session_state.auto_connected:
+    st.session_state.auto_connected = True
+    
+    # Check if we have keys to auto-validate
+    mochi_key = st.session_state.mochi_key
+    openai_key = st.session_state.openai_key
+    anthropic_key = st.session_state.anthropic_key
+    ai_provider = st.session_state.ai_provider
+    
+    if mochi_key:
+        # Validate Mochi
+        mochi_ok, _ = run_async(mochi.validate_api_key(mochi_key))
+        st.session_state.mochi_valid = mochi_ok
+        if mochi_ok:
+            st.session_state.decks = run_async(mochi.get_decks(mochi_key))
+            st.session_state.deck_tree = mochi.build_deck_tree(st.session_state.decks)
+    
+    # Validate AI provider
+    if ai_provider == "openai" and openai_key:
+        openai_ok, _ = run_async(ai.validate_openai_key(openai_key))
+        st.session_state.openai_valid = openai_ok
+    elif ai_provider == "anthropic" and anthropic_key:
+        anthropic_ok, _ = run_async(ai.validate_anthropic_key(anthropic_key))
+        st.session_state.anthropic_valid = anthropic_ok
+        # Also validate OpenAI if available (for voice)
+        if openai_key:
+            openai_ok, _ = run_async(ai.validate_openai_key(openai_key))
+            st.session_state.openai_valid = openai_ok
 
 
 # ============ Sidebar: API Keys & Settings ============
@@ -187,14 +225,14 @@ with st.sidebar:
         )
         openai_key = st.session_state.openai_key
     
-    # Note about voice features
+    # Note about voice features - OpenAI key needed for TTS/STT regardless of AI provider
     if ai_provider == "anthropic":
-        st.caption("ℹ️ Voice features use OpenAI (add key above for TTS/STT)")
+        st.caption("ℹ️ Voice features require OpenAI for TTS/STT (optional)")
         openai_voice_key = st.text_input(
-            "OpenAI Key (for voice)",
+            "OpenAI Key (for voice features)",
             value=st.session_state.openai_key,
             type="password",
-            help="Required for voice mode (text-to-speech & speech-to-text)",
+            help="Optional - enables voice mode with Claude",
         )
         openai_key = openai_voice_key
     
@@ -275,16 +313,27 @@ with st.sidebar:
     
     # Voice mode toggles
     st.divider()
+    
+    # Voice features require OpenAI key (for TTS/STT APIs)
+    has_openai_key = bool(st.session_state.openai_key)
+    
+    voice_disabled = not has_openai_key
+    voice_help = "Enable text-to-speech for questions and feedback"
+    if voice_disabled:
+        voice_help = "⚠️ Requires OpenAI API key for TTS/STT"
+    
     st.session_state.voice_mode = st.toggle(
         "🔊 Voice Mode",
-        value=st.session_state.voice_mode,
-        help="Enable text-to-speech for questions and feedback",
+        value=st.session_state.voice_mode and has_openai_key,
+        help=voice_help,
+        disabled=voice_disabled,
     )
     
     st.session_state.hands_free_mode = st.toggle(
         "🙌 Hands-Free Mode",
-        value=st.session_state.hands_free_mode,
+        value=st.session_state.hands_free_mode and has_openai_key,
         help="Auto-submit after recording, voice commands (say 'skip' or 'next'), auto-advance",
+        disabled=voice_disabled,
     )
     
     if st.session_state.hands_free_mode:
