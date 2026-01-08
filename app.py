@@ -585,6 +585,7 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
     )
     
     voice_command_detected = None
+    auto_submit_after_transcribe = False
     
     # Only transcribe if we have new audio (different key or new recording)
     if audio_input and st.session_state.last_audio_key != audio_key:
@@ -606,6 +607,9 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
                     voice_command_detected = "skip"
                 elif lower_transcribed in ["next", "continue", "go on"]:
                     voice_command_detected = "continue"
+                else:
+                    # Auto-submit after transcription in voice mode
+                    auto_submit_after_transcribe = st.session_state.voice_mode
                 
             except Exception as e:
                 st.error(f"Transcription error: {e}")
@@ -635,10 +639,9 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
             st.session_state.review_state = "complete"
         st.rerun()
     
-    # Auto-submit in hands-free mode when audio is recorded
-    if st.session_state.voice_mode and audio_input and user_answer and not voice_command_detected and not st.session_state.auto_submitted:
+    # Auto-submit immediately after transcription in voice mode
+    if auto_submit_after_transcribe and user_answer:
         submit = True
-        st.session_state.auto_submitted = True
     
     if skip:
         # Move to next card

@@ -1,0 +1,1 @@
+* Make sure every time after you push something, you rerun the streamlit app
