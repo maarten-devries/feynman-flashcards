@@ -1,1 +1,1 @@
-* Make sure every time after you push something, you rerun the streamlit app
+* After you make your changes, please use a branch, commit them with a good description, merge the branch into main and push.

@@ -303,15 +303,7 @@ Your role is to:
 3. If understanding is incomplete, ask a follow-up question to probe deeper
 {source_context}
 Be encouraging but honest. Focus on conceptual understanding, not exact wording.
-A partially correct answer should get a follow-up question to clarify gaps.
-
-Respond in JSON format:
-{{
-    "is_correct": true/false,
-    "score": 0.0-1.0,
-    "feedback": "Your explanation of what's right/wrong",
-    "follow_up": "A follow-up question if needed, or null if understanding is complete"
-}}"""
+A partially correct answer should get a follow-up question to clarify gaps."""
 
     # Build conversation history context
     history_text = ""
@@ -326,17 +318,50 @@ Expected answer: {expected_answer}
 
 Student's answer: {user_answer}
 {history_text}
-Evaluate this answer and respond in JSON format."""
+Evaluate this answer."""
 
     if provider == "anthropic":
         client = get_anthropic_client(api_key)
+        
+        # Use tool for structured output
+        evaluation_tool = {
+            "name": "submit_evaluation",
+            "description": "Submit the evaluation of the student's answer",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "is_correct": {
+                        "type": "boolean",
+                        "description": "Whether the student demonstrates understanding"
+                    },
+                    "score": {
+                        "type": "number",
+                        "description": "Confidence score from 0.0 to 1.0"
+                    },
+                    "feedback": {
+                        "type": "string",
+                        "description": "Explanation of what's right or wrong"
+                    },
+                    "follow_up": {
+                        "type": ["string", "null"],
+                        "description": "A follow-up question if understanding is incomplete, or null"
+                    }
+                },
+                "required": ["is_correct", "score", "feedback", "follow_up"]
+            }
+        }
+        
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=500,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
+            tools=[evaluation_tool],
+            tool_choice={"type": "tool", "name": "submit_evaluation"},
         )
-        result = json.loads(response.content[0].text)
+        
+        # Extract result from tool use
+        result = response.content[0].input
     else:
         client = get_openai_client(api_key)
         messages = [{"role": "system", "content": system_prompt}]
