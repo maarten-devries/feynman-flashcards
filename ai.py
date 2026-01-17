@@ -78,19 +78,20 @@ async def validate_api_key(api_key: str) -> tuple[bool, str]:
     return await validate_openai_key(api_key)
 
 
-def parse_card_content(content: str) -> tuple[str, str, Optional[str]]:
+def parse_card_sides(content: str) -> tuple[list[str], Optional[str]]:
     """
-    Parse Mochi card content into question, answer, and source.
+    Parse Mochi card content into multiple sides and source.
     
-    Mochi cards typically use --- to separate front/back,
-    or use template fields like << Front >> and << Back >>.
+    Mochi cards use --- to separate sides. Cards can have 2+ sides,
+    useful for structured arguments or chain-of-thought reviews.
+    
     Source field can be specified as:
     - "Source: <url>" (plain URL)
     - "Source: [label](url)" (markdown hyperlink)
     - Template field << Source >>
     
     Returns:
-        (question, answer, source_url) tuple
+        (list of sides, source_url) tuple
     """
     source_url = None
     
@@ -99,7 +100,6 @@ def parse_card_content(content: str) -> tuple[str, str, Optional[str]]:
     source_md_match = re.search(r'^Source:\s*\[[^\]]*\]\((https?://[^)]+)\)', content, re.MULTILINE | re.IGNORECASE)
     if source_md_match:
         source_url = source_md_match.group(1).strip()
-        # Remove the source line from content for cleaner parsing
         content = re.sub(r'^Source:\s*\[[^\]]*\]\(https?://[^)]+\)\s*\n?', '', content, flags=re.MULTILINE | re.IGNORECASE)
     
     # Format 2: "Source: <url>" plain URL on its own line
@@ -115,24 +115,50 @@ def parse_card_content(content: str) -> tuple[str, str, Optional[str]]:
         if template_source_match:
             source_url = template_source_match.group(1).strip()
     
-    # Handle --- separator (most common)
+    # Handle --- separator - split into ALL sides (not just 2)
     if "---" in content:
-        parts = content.split("---", 1)
-        question = parts[0].strip()
-        answer = parts[1].strip() if len(parts) > 1 else ""
-        # Clean up markdown headers
-        question = question.lstrip("#").strip()
-        return question, answer, source_url
+        parts = content.split("---")
+        sides = [part.strip().lstrip("#").strip() for part in parts if part.strip()]
+        return sides, source_url
     
     # Handle << Field >> template syntax
     if "<<" in content and ">>" in content:
-        # This is a template card - just use the whole content
-        return content, "", source_url
+        return [content], source_url
     
     # Fallback: treat first line as question, rest as answer
     lines = content.strip().split("\n", 1)
     question = lines[0].lstrip("#").strip()
     answer = lines[1].strip() if len(lines) > 1 else ""
+    if answer:
+        return [question, answer], source_url
+    return [question], source_url
+
+
+def is_multi_sided_card(sides: list[str]) -> bool:
+    """Check if a card has more than 2 sides (structured argument card)."""
+    return len(sides) > 2
+
+
+def parse_card_content(content: str) -> tuple[str, str, Optional[str]]:
+    """
+    Parse Mochi card content into question, answer, and source.
+    
+    Mochi cards typically use --- to separate front/back,
+    or use template fields like << Front >> and << Back >>.
+    Source field can be specified as:
+    - "Source: <url>" (plain URL)
+    - "Source: [label](url)" (markdown hyperlink)
+    - Template field << Source >>
+    
+    Returns:
+        (question, answer, source_url) tuple
+    
+    Note: For multi-sided cards (3+ sides), use parse_card_sides() instead.
+    This function only returns the first two sides for backwards compatibility.
+    """
+    sides, source_url = parse_card_sides(content)
+    question = sides[0] if sides else ""
+    answer = sides[1] if len(sides) > 1 else ""
     return question, answer, source_url
 
 

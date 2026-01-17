@@ -132,6 +132,13 @@ if "use_source" not in st.session_state:
     st.session_state.use_source = False
 if "source_cache" not in st.session_state:
     st.session_state.source_cache = {}  # URL -> content cache
+# Multi-sided card support
+if "card_sides" not in st.session_state:
+    st.session_state.card_sides = []  # All sides of current card
+if "current_side_index" not in st.session_state:
+    st.session_state.current_side_index = 0  # Which side we're currently reviewing
+if "is_multi_sided" not in st.session_state:
+    st.session_state.is_multi_sided = False  # Whether current card has 3+ sides
 
 
 def run_async(coro):
@@ -433,10 +440,15 @@ def start_new_card():
             mochi.resolve_card_images(st.session_state.mochi_key, card_id, content)
         )
     
-    # Parse question, answer, and source
-    question, answer, source_url = ai.parse_card_content(resolved_content)
-    st.session_state.original_question = question
-    st.session_state.original_answer = answer
+    # Parse all sides and source
+    sides, source_url = ai.parse_card_sides(resolved_content)
+    st.session_state.card_sides = sides
+    st.session_state.current_side_index = 0
+    st.session_state.is_multi_sided = ai.is_multi_sided_card(sides)
+    
+    # For backwards compatibility, also set original_question and original_answer
+    st.session_state.original_question = sides[0] if sides else ""
+    st.session_state.original_answer = sides[1] if len(sides) > 1 else ""
     st.session_state.resolved_content = resolved_content  # Store for display
     st.session_state.source_url = source_url
     
@@ -448,16 +460,21 @@ def start_new_card():
         st.session_state.source_content = None
         st.session_state.use_source = False
     
-    # Generate rephrased question
-    with st.spinner("Rephrasing question..."):
-        ai_key, ai_provider = get_ai_config()
-        rephrased = ai.rephrase_question(
-            ai_key,
-            question,
-            answer,
-            provider=ai_provider,
-        )
-        st.session_state.rephrased_question = rephrased
+    # For multi-sided cards, we don't rephrase - we show the sides as-is
+    if st.session_state.is_multi_sided:
+        st.session_state.rephrased_question = sides[0] if sides else ""
+        st.session_state.review_state = "multi_side"
+    else:
+        # Generate rephrased question for regular 2-sided cards
+        with st.spinner("Rephrasing question..."):
+            ai_key, ai_provider = get_ai_config()
+            rephrased = ai.rephrase_question(
+                ai_key,
+                st.session_state.original_question,
+                st.session_state.original_answer,
+                provider=ai_provider,
+            )
+            st.session_state.rephrased_question = rephrased
     
     st.session_state.conversation_history = []
     st.session_state.current_evaluation = None
@@ -610,6 +627,9 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
         st.session_state.last_audio_key = None
         st.session_state.current_card_index += 1
         st.session_state.rephrased_question = ""
+        st.session_state.card_sides = []
+        st.session_state.current_side_index = 0
+        st.session_state.is_multi_sided = False
         st.session_state.review_state = "question"
         st.session_state.pop("played_question", None)
         st.session_state.pop("played_follow_up", None)
@@ -672,6 +692,9 @@ if st.session_state.review_state in ["question", "answering", "follow_up"]:
         st.session_state.last_audio_key = None
         st.session_state.current_card_index += 1
         st.session_state.rephrased_question = ""
+        st.session_state.card_sides = []
+        st.session_state.current_side_index = 0
+        st.session_state.is_multi_sided = False
         st.session_state.review_state = "question"
         st.session_state.pop("played_question", None)
         st.session_state.pop("played_follow_up", None)
@@ -853,6 +876,9 @@ if st.session_state.review_state == "evaluating":
         if action == "next" or action == "skip":
             st.session_state.current_card_index += 1
             st.session_state.rephrased_question = ""
+            st.session_state.card_sides = []
+            st.session_state.current_side_index = 0
+            st.session_state.is_multi_sided = False
             st.session_state.review_state = "question"
             st.session_state.conversation_history = []
             st.session_state.chat_messages = []
@@ -885,6 +911,9 @@ if st.session_state.review_state == "evaluating":
                 pass
             st.session_state.current_card_index += 1
             st.session_state.rephrased_question = ""
+            st.session_state.card_sides = []
+            st.session_state.current_side_index = 0
+            st.session_state.is_multi_sided = False
             st.session_state.review_state = "question"
             st.session_state.conversation_history = []
             st.session_state.chat_messages = []
@@ -909,6 +938,9 @@ if st.session_state.review_state == "evaluating":
                 pass
             st.session_state.current_card_index += 1
             st.session_state.rephrased_question = ""
+            st.session_state.card_sides = []
+            st.session_state.current_side_index = 0
+            st.session_state.is_multi_sided = False
             st.session_state.review_state = "question"
             st.session_state.conversation_history = []
             st.session_state.chat_messages = []
@@ -947,6 +979,9 @@ if st.session_state.review_state == "evaluating":
         st.session_state.follow_up_count = 0
         st.session_state.transcribed_answer = ""
         st.session_state.last_audio_key = None
+        st.session_state.card_sides = []
+        st.session_state.current_side_index = 0
+        st.session_state.is_multi_sided = False
         st.session_state.pop("played_question", None)
         st.session_state.pop("played_feedback", None)
         st.session_state.pop("pending_card_suggestion", None)
@@ -991,6 +1026,136 @@ if st.session_state.review_state == "evaluating":
             st.rerun()
 
 
+# ============ Multi-Sided Card Review ============
+
+if st.session_state.review_state == "multi_side":
+    # Progress indicator
+    total = len(st.session_state.current_cards)
+    current = st.session_state.current_card_index + 1
+    st.progress(current / total, text=f"Card {current} of {total}")
+    
+    # Initialize card if needed
+    if not st.session_state.card_sides:
+        start_new_card()
+        st.rerun()
+    
+    sides = st.session_state.card_sides
+    current_side = st.session_state.current_side_index
+    total_sides = len(sides)
+    
+    # Side progress indicator
+    st.caption(f"📚 Structured Card: Step {current_side + 1} of {total_sides}")
+    side_progress = st.progress((current_side + 1) / total_sides)
+    
+    # Show previous sides as context (collapsed)
+    if current_side > 0:
+        with st.expander(f"📖 Previous Steps (1-{current_side})", expanded=False):
+            for i in range(current_side):
+                st.markdown(f"**Step {i + 1}:**")
+                st.info(sides[i])
+                if i < current_side - 1:
+                    st.markdown("↓")
+    
+    # Show current side
+    st.subheader(f"Step {current_side + 1}")
+    st.info(f"🧠 {sides[current_side]}")
+    
+    # Show original card content
+    with st.expander("📄 Show Full Card", expanded=False):
+        st.markdown(st.session_state.resolved_content, unsafe_allow_html=True)
+    
+    # Navigation buttons
+    st.divider()
+    
+    if current_side < total_sides - 1:
+        # More sides to go
+        col1, col2, col3 = st.columns([2, 2, 1])
+        with col1:
+            if st.button("➡️ Next Step", type="primary", use_container_width=True):
+                st.session_state.current_side_index += 1
+                st.rerun()
+        with col2:
+            if current_side > 0:
+                if st.button("⬅️ Previous Step", use_container_width=True):
+                    st.session_state.current_side_index -= 1
+                    st.rerun()
+        with col3:
+            if st.button("⏭️ Skip Card", use_container_width=True):
+                st.session_state.current_card_index += 1
+                st.session_state.rephrased_question = ""
+                st.session_state.card_sides = []
+                st.session_state.current_side_index = 0
+                st.session_state.review_state = "question"
+                st.session_state.pop("played_question", None)
+                if st.session_state.current_card_index >= len(st.session_state.current_cards):
+                    st.session_state.review_state = "complete"
+                st.rerun()
+    else:
+        # Last side - show SRS buttons
+        st.subheader("📊 Mark Review")
+        st.caption("You've reviewed all steps. Update Mochi's spaced repetition schedule.")
+        
+        card = st.session_state.current_cards[st.session_state.current_card_index]
+        card_id = card.get("id")
+        
+        def move_to_next_multi():
+            """Helper to move to next card from multi-sided review."""
+            st.session_state.current_card_index += 1
+            st.session_state.rephrased_question = ""
+            st.session_state.card_sides = []
+            st.session_state.current_side_index = 0
+            st.session_state.review_state = "question"
+            st.session_state.conversation_history = []
+            st.session_state.follow_up_count = 0
+            st.session_state.pop("played_question", None)
+            if st.session_state.current_card_index >= len(st.session_state.current_cards):
+                st.session_state.review_state = "complete"
+        
+        col_good, col_again, col_skip = st.columns(3)
+        
+        with col_good:
+            if st.button("✅ Got it!", type="primary", use_container_width=True, help="Mark as remembered"):
+                with st.spinner("Marking review..."):
+                    try:
+                        run_async(mochi.review_card(
+                            st.session_state.mochi_key,
+                            card_id,
+                            remembered=True,
+                        ))
+                        st.toast("✅ Marked as remembered!", icon="✅")
+                    except Exception as e:
+                        st.error(f"Failed to mark review: {e}")
+                move_to_next_multi()
+                st.rerun()
+        
+        with col_again:
+            if st.button("🔁 Again", use_container_width=True, help="Mark as forgotten"):
+                with st.spinner("Marking review..."):
+                    try:
+                        run_async(mochi.review_card(
+                            st.session_state.mochi_key,
+                            card_id,
+                            remembered=False,
+                        ))
+                        st.toast("🔁 Marked for review again", icon="🔁")
+                    except Exception as e:
+                        st.error(f"Failed to mark review: {e}")
+                move_to_next_multi()
+                st.rerun()
+        
+        with col_skip:
+            if st.button("⏭️ Skip", use_container_width=True, help="Skip without marking"):
+                move_to_next_multi()
+                st.rerun()
+        
+        # Also allow going back to previous steps
+        if current_side > 0:
+            st.divider()
+            if st.button("⬅️ Review Previous Steps", use_container_width=True):
+                st.session_state.current_side_index = 0
+                st.rerun()
+
+
 # ============ Session Complete ============
 
 if st.session_state.review_state == "complete":
@@ -1005,6 +1170,9 @@ if st.session_state.review_state == "complete":
         st.session_state.current_cards = []
         st.session_state.current_card_index = 0
         st.session_state.rephrased_question = ""
+        st.session_state.card_sides = []
+        st.session_state.current_side_index = 0
+        st.session_state.is_multi_sided = False
         st.session_state.conversation_history = []
         st.session_state.chat_messages = []
         st.rerun()
